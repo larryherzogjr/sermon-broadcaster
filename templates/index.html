@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sermon Broadcaster</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #1a1a1e;
+            --surface: #24242a;
+            --surface-raised: #2e2e36;
+            --border: #3a3a44;
+            --text: #e8e6e1;
+            --text-muted: #9a978f;
+            --accent: #c9a84c;
+            --accent-dim: #8a7333;
+            --green: #5a9a6a;
+            --red: #b05050;
+            --blue: #5a7a9a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Source Serif 4', Georgia, serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 3rem 1.5rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            font-style: italic;
+        }
+
+        /* ── Input Form ─────────────────────────────── */
+        .input-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .field {
+            margin-bottom: 1.5rem;
+        }
+
+        .field:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        input[type="text"]::placeholder {
+            color: var(--text-muted);
+            opacity: 0.5;
+        }
+
+        .field-row {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+        }
+
+        .field-row .field {
+            flex: 1;
+            margin-bottom: 0;
+        }
+
+        .field-row .field-small {
+            flex: 0 0 160px;
+        }
+
+        button#processBtn {
+            width: 100%;
+            padding: 0.85rem;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 4px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.9rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.2s, opacity 0.2s;
+            margin-top: 1.5rem;
+        }
+
+        button#processBtn:hover {
+            background: #d4b358;
+        }
+
+        button#processBtn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ── Status Console ─────────────────────────── */
+        .status-section {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .status-section.active {
+            display: block;
+        }
+
+        .status-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .status-header h2 {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .status-badge {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            padding: 0.25rem 0.65rem;
+            border-radius: 3px;
+        }
+
+        .status-badge.running {
+            background: var(--blue);
+            color: #fff;
+        }
+
+        .status-badge.complete {
+            background: var(--green);
+            color: #fff;
+        }
+
+        .status-badge.failed {
+            background: var(--red);
+            color: #fff;
+        }
+
+        .console {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1rem;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.8;
+        }
+
+        .console-line {
+            color: var(--text-muted);
+        }
+
+        .console-line .time {
+            color: var(--accent-dim);
+            margin-right: 0.75rem;
+        }
+
+        .console-line .msg {
+            color: var(--text);
+        }
+
+        .console-line.error .msg {
+            color: var(--red);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* ── Result Section ─────────────────────────── */
+        .result-section {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--green);
+            border-radius: 8px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .result-section.active {
+            display: block;
+        }
+
+        .result-section h2 {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--green);
+            margin-bottom: 1.25rem;
+        }
+
+        .result-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .result-item {
+            background: var(--bg);
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+        }
+
+        .result-item .label {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+
+        .result-item .value {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.95rem;
+            color: var(--text);
+        }
+
+        a.download-btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            background: var(--green);
+            color: #fff;
+            text-decoration: none;
+            border-radius: 4px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            transition: background 0.2s;
+        }
+
+        a.download-btn:hover {
+            background: #6aaa7a;
+        }
+
+        /* ── Footer ─────────────────────────────────── */
+        footer {
+            text-align: center;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Sermon Broadcaster</h1>
+            <p>Video to broadcast-ready audio.</p>
+        </header>
+
+        <!-- Input Form -->
+        <div class="input-section">
+            <div class="field">
+                <label for="urlInput">YouTube URL</label>
+                <input type="text" id="urlInput"
+                       placeholder="https://www.youtube.com/watch?v=..."
+                       oninput="toggleSourceMode()">
+            </div>
+
+            <div style="text-align: center; margin: 1rem 0; position: relative;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--text-muted); letter-spacing: 0.15em; text-transform: uppercase; background: var(--surface); padding: 0 0.75rem; position: relative; z-index: 1;">
+                    or upload a file
+                </span>
+                <div style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: var(--border); z-index: 0;"></div>
+            </div>
+
+            <div class="field">
+                <label for="fileInput">Video / Audio File</label>
+                <input type="file" id="fileInput"
+                       accept=".mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.flac,.ogg"
+                       onchange="toggleSourceMode()"
+                       style="width: 100%; padding: 0.6rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; cursor: pointer;">
+            </div>
+
+            <div class="field" style="margin-bottom: 1.25rem;">
+                <label style="display: block; font-size: 0.75rem; color: var(--text-muted); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 0.5rem;">
+                    Radio Bumpers
+                </label>
+                <label class="checkbox-label" style="display: flex; align-items: center; cursor: pointer; gap: 0.65rem; margin-bottom: 0.5rem;">
+                    <input type="checkbox" id="bumpersDynamicCheckbox" onchange="toggleBumpers()"
+                           style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;">
+                    <span style="font-family: 'Source Serif 4', serif; font-size: 0.95rem; color: var(--text); text-transform: none; letter-spacing: 0;">
+                        Include radio intro &amp; outro <em style="color: var(--text-muted);">(dynamic teaser)</em>
+                    </span>
+                </label>
+                <label class="checkbox-label" style="display: flex; align-items: center; cursor: pointer; gap: 0.65rem;">
+                    <input type="checkbox" id="bumpersStockCheckbox" onchange="toggleBumpers()"
+                           style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;">
+                    <span style="font-family: 'Source Serif 4', serif; font-size: 0.95rem; color: var(--text); text-transform: none; letter-spacing: 0;">
+                        Include radio intro &amp; outro <em style="color: var(--text-muted);">(stock teaser)</em>
+                    </span>
+                </label>
+            </div>
+            <div class="field-row">
+                <div class="field field-small">
+                    <label for="durationInput">Target Duration</label>
+                    <input type="text" id="durationInput"
+                           value="{{ default_duration }}"
+                           placeholder="27:18">
+                </div>
+                <div class="field" style="flex: 0 0 auto;">
+                    <label>&nbsp;</label>
+                    <span id="durationHint" style="font-size: 0.8rem; color: var(--text-muted); font-family: 'IBM Plex Mono', monospace;">
+                        MM:SS &mdash; sermon only
+                    </span>
+                </div>
+            </div>
+            <button id="processBtn" onclick="startProcessing()">
+                Process Sermon
+            </button>
+        </div>
+
+        <!-- Status Console -->
+        <div class="status-section" id="statusSection">
+            <div class="status-header">
+                <h2><span class="spinner" id="statusSpinner"></span> Processing</h2>
+                <span class="status-badge running" id="statusBadge">Running</span>
+            </div>
+            <div class="console" id="console"></div>
+        </div>
+
+        <!-- Result -->
+        <div class="result-section" id="resultSection">
+            <h2>Complete</h2>
+            <div class="result-grid" id="resultGrid"></div>
+            <div id="downloadButtons" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+        </div>
+
+        <footer>
+            Sermon Broadcaster &mdash; Grace Free Lutheran Church
+        </footer>
+    </div>
+
+    <script>
+        let currentJobId = null;
+        let pollInterval = null;
+        let lastMessageCount = 0;
+
+        const DEFAULT_SERMON_DURATION = '{{ default_duration }}';
+        const DEFAULT_BROADCAST_DURATION = '{{ default_broadcast_duration }}';
+
+        function toggleBumpers() {
+            const dynamicChecked = document.getElementById('bumpersDynamicCheckbox').checked;
+            const stockChecked = document.getElementById('bumpersStockCheckbox').checked;
+            const anyChecked = dynamicChecked || stockChecked;
+            const durationInput = document.getElementById('durationInput');
+            const hint = document.getElementById('durationHint');
+
+            if (anyChecked) {
+                durationInput.value = DEFAULT_BROADCAST_DURATION;
+                hint.innerHTML = 'MM:SS &mdash; full broadcast';
+            } else {
+                durationInput.value = DEFAULT_SERMON_DURATION;
+                hint.innerHTML = 'MM:SS &mdash; sermon only';
+            }
+        }
+
+        function toggleSourceMode() {
+            const url = document.getElementById('urlInput').value.trim();
+            const fileInput = document.getElementById('fileInput');
+            const hasFile = fileInput.files && fileInput.files.length > 0;
+            if (url && hasFile) {
+                if (document.activeElement === document.getElementById('urlInput')) {
+                    fileInput.value = '';
+                }
+            }
+        }
+
+        function startProcessing() {
+            const url = document.getElementById('urlInput').value.trim();
+            const fileInput = document.getElementById('fileInput');
+            const hasFile = fileInput.files && fileInput.files.length > 0;
+            const duration = document.getElementById('durationInput').value.trim();
+            const includeDynamic = document.getElementById('bumpersDynamicCheckbox').checked;
+            const includeStock = document.getElementById('bumpersStockCheckbox').checked;
+
+            if (!url && !hasFile) {
+                alert('Please enter a YouTube URL or select a file to upload.');
+                return;
+            }
+
+            const btn = document.getElementById('processBtn');
+            btn.disabled = true;
+            btn.textContent = hasFile ? 'Uploading & Processing...' : 'Processing...';
+
+            document.getElementById('console').innerHTML = '';
+            document.getElementById('resultSection').classList.remove('active');
+            document.getElementById('statusSection').classList.add('active');
+            document.getElementById('statusBadge').className = 'status-badge running';
+            document.getElementById('statusBadge').textContent = 'Running';
+            document.getElementById('statusSpinner').style.display = 'inline-block';
+            lastMessageCount = 0;
+
+            let fetchPromise;
+
+            if (hasFile) {
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                formData.append('target_duration', duration);
+                formData.append('include_bumpers_dynamic', includeDynamic.toString());
+                formData.append('include_bumpers_stock', includeStock.toString());
+                if (url) formData.append('url', url);
+
+                fetchPromise = fetch('/api/process', {
+                    method: 'POST',
+                    body: formData,
+                });
+            } else {
+                fetchPromise = fetch('/api/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: url,
+                        target_duration: duration,
+                        include_bumpers_dynamic: includeDynamic,
+                        include_bumpers_stock: includeStock,
+                    }),
+                });
+            }
+
+            fetchPromise
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                currentJobId = data.job_id;
+                pollInterval = setInterval(pollStatus, 2000);
+            })
+            .catch(err => showError(err.message));
+        }
+
+        function pollStatus() {
+            if (!currentJobId) return;
+
+            fetch(`/api/status/${currentJobId}`)
+            .then(r => r.json())
+            .then(data => {
+                updateConsole(data.messages);
+
+                if (data.status === 'complete') {
+                    clearInterval(pollInterval);
+                    showResult(data);
+                } else if (data.status === 'failed') {
+                    clearInterval(pollInterval);
+                    showError(data.error || 'Unknown error');
+                }
+            })
+            .catch(err => console.error('Poll error:', err));
+        }
+
+        function updateConsole(messages) {
+            if (messages.length <= lastMessageCount) return;
+
+            const console_el = document.getElementById('console');
+            for (let i = lastMessageCount; i < messages.length; i++) {
+                const msg = messages[i];
+                const line = document.createElement('div');
+                line.className = 'console-line' + (msg.text.startsWith('ERROR') ? ' error' : '');
+                line.innerHTML = `<span class="time">${msg.time}</span><span class="msg">${escHtml(msg.text)}</span>`;
+                console_el.appendChild(line);
+            }
+            lastMessageCount = messages.length;
+            console_el.scrollTop = console_el.scrollHeight;
+        }
+
+        function showResult(data) {
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge complete';
+            badge.textContent = 'Complete';
+            document.getElementById('statusSpinner').style.display = 'none';
+
+            const btn = document.getElementById('processBtn');
+            btn.disabled = false;
+            btn.textContent = 'Process Sermon';
+
+            const result = data.result;
+            if (!result) return;
+
+            const grid = document.getElementById('resultGrid');
+            grid.innerHTML = '';
+
+            const items = [];
+
+            if (result.boundaries) {
+                const b = result.boundaries;
+                if (b.sermon_title_guess) {
+                    items.push(['Sermon', b.sermon_title_guess]);
+                }
+                items.push(['Confidence', b.confidence || '—']);
+            }
+
+            if (result.processing) {
+                const p = result.processing;
+                items.push(['Sermon Duration', formatDuration(p.original_duration)]);
+                if (result.broadcast_duration) {
+                    items.push(['Broadcast Duration', formatDuration(result.broadcast_duration)]);
+                } else {
+                    items.push(['Final Duration', formatDuration(p.final_duration)]);
+                }
+                if (Math.abs(p.silence_adjustment) > 0.1) {
+                    items.push(['Silence Adj.', (p.silence_adjustment > 0 ? '+' : '') + p.silence_adjustment.toFixed(1) + 's']);
+                }
+                if (Math.abs(p.tempo_factor - 1.0) > 0.001) {
+                    items.push(['Tempo', (p.tempo_factor).toFixed(3) + 'x']);
+                }
+            }
+
+            if (result.teaser) {
+                const t = result.teaser;
+                items.push(['Teaser', '"' + (t.teaser_text || '').substring(0, 60) + '..."']);
+            }
+
+            if (result.include_bumpers) {
+                items.push(['Format', 'Intro + Sermon + Outro']);
+            }
+
+            if (result.timing && result.timing.total) {
+                items.push(['Processing Time', formatDuration(result.timing.total)]);
+            }
+
+            items.forEach(([label, value]) => {
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                div.innerHTML = `<div class="label">${escHtml(label)}</div><div class="value">${escHtml(String(value))}</div>`;
+                grid.appendChild(div);
+            });
+
+            // Render download buttons for each output variant
+            const dlContainer = document.getElementById('downloadButtons');
+            dlContainer.innerHTML = '';
+
+            const outputs = result.outputs || [];
+            if (outputs.length > 0) {
+                outputs.forEach(out => {
+                    const variantLabels = {
+                        'dynamic': 'Download MP3 (Dynamic Teaser)',
+                        'stock': 'Download MP3 (Stock Teaser)',
+                        'sermon-only': 'Download MP3 (Sermon Only)',
+                    };
+                    const label = variantLabels[out.variant] || `Download ${out.filename}`;
+
+                    const btn = document.createElement('a');
+                    btn.className = 'download-btn';
+                    btn.href = `/api/download/${encodeURIComponent(out.filename)}`;
+                    btn.textContent = label;
+                    dlContainer.appendChild(btn);
+
+                    if (out.note) {
+                        const note = document.createElement('div');
+                        note.style.cssText = 'font-size: 0.8rem; color: var(--text-muted); font-style: italic; margin-top: -0.25rem; margin-bottom: 0.25rem; text-align: center;';
+                        note.textContent = out.note;
+                        dlContainer.appendChild(note);
+                    }
+                });
+            } else if (result.output_filename) {
+                // Fallback for legacy single-output responses
+                const btn = document.createElement('a');
+                btn.className = 'download-btn';
+                btn.href = `/api/download/${encodeURIComponent(result.output_filename)}`;
+                btn.textContent = 'Download MP3';
+                dlContainer.appendChild(btn);
+            }
+
+            document.getElementById('resultSection').classList.add('active');
+        }
+
+        function showError(msg) {
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge failed';
+            badge.textContent = 'Failed';
+            document.getElementById('statusSpinner').style.display = 'none';
+
+            const console_el = document.getElementById('console');
+            const line = document.createElement('div');
+            line.className = 'console-line error';
+            line.innerHTML = `<span class="msg">${escHtml(msg)}</span>`;
+            console_el.appendChild(line);
+
+            const btn = document.getElementById('processBtn');
+            btn.disabled = false;
+            btn.textContent = 'Process Sermon';
+
+            clearInterval(pollInterval);
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds && seconds !== 0) return '—';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}m ${s}s`;
+        }
+
+        function escHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+    </script>
+</body>
+</html>

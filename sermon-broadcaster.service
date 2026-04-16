@@ -1,0 +1,19 @@
+[Unit]
+Description=Sermon Broadcaster
+After=network.target
+
+[Service]
+Type=simple
+User=lherzog
+WorkingDirectory=/opt/sermon-broadcaster
+EnvironmentFile=/opt/sermon-broadcaster/.env
+ExecStart=/opt/sermon-broadcaster/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+# Large file uploads need time
+TimeoutStartSec=30
+# Prevent OOM from Whisper if using local transcription
+MemoryMax=8G
+
+[Install]
+WantedBy=multi-user.target
