@@ -364,6 +364,16 @@
             </div>
 
             <div class="field" style="margin-bottom: 1.25rem;">
+                <label class="checkbox-label" style="display: flex; align-items: center; cursor: pointer; gap: 0.65rem;">
+                    <input type="checkbox" id="sermonOnlyCheckbox"
+                           style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;">
+                    <span style="font-family: 'Source Serif 4', serif; font-size: 0.95rem; color: var(--text); text-transform: none; letter-spacing: 0;">
+                        Uploaded audio is sermon only <em style="color: var(--text-muted);">(skip boundary detection)</em>
+                    </span>
+                </label>
+            </div>
+
+            <div class="field" style="margin-bottom: 1.25rem;">
                 <label style="display: block; font-size: 0.75rem; color: var(--text-muted); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 0.5rem;">
                     Radio Bumpers
                 </label>
@@ -464,6 +474,7 @@
             const duration = document.getElementById('durationInput').value.trim();
             const includeDynamic = document.getElementById('bumpersDynamicCheckbox').checked;
             const includeStock = document.getElementById('bumpersStockCheckbox').checked;
+            const sermonOnly = document.getElementById('sermonOnlyCheckbox').checked;
 
             if (!url && !hasFile) {
                 alert('Please enter a YouTube URL or select a file to upload.');
@@ -490,6 +501,7 @@
                 formData.append('target_duration', duration);
                 formData.append('include_bumpers_dynamic', includeDynamic.toString());
                 formData.append('include_bumpers_stock', includeStock.toString());
+                formData.append('sermon_only', sermonOnly.toString());
                 if (url) formData.append('url', url);
 
                 fetchPromise = fetch('/api/process', {
@@ -505,6 +517,7 @@
                         target_duration: duration,
                         include_bumpers_dynamic: includeDynamic,
                         include_bumpers_stock: includeStock,
+                        sermon_only: sermonOnly,
                     }),
                 });
             }

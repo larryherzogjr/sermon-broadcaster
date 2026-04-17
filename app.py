@@ -42,6 +42,7 @@ jobs = {}
 class Job:
     def __init__(self, job_id, target_duration,
                  include_bumpers_dynamic=False, include_bumpers_stock=False,
+                 sermon_only=False,
                  youtube_url=None, local_file=None):
         self.job_id = job_id
         self.youtube_url = youtube_url
@@ -49,6 +50,7 @@ class Job:
         self.target_duration = target_duration
         self.include_bumpers_dynamic = include_bumpers_dynamic
         self.include_bumpers_stock = include_bumpers_stock
+        self.sermon_only = sermon_only
         self.status = "queued"
         self.messages = []
         self.result = None
@@ -97,6 +99,7 @@ def _run_job(job: Job):
             target_duration=job.target_duration,
             include_bumpers_dynamic=job.include_bumpers_dynamic,
             include_bumpers_stock=job.include_bumpers_stock,
+            sermon_only=job.sermon_only,
             status_callback=job.update_status,
         )
         job.result = result
@@ -128,6 +131,7 @@ def start_processing():
         youtube_url = request.form.get("url", "").strip()
         include_dynamic = request.form.get("include_bumpers_dynamic", "false").lower() == "true"
         include_stock = request.form.get("include_bumpers_stock", "false").lower() == "true"
+        sermon_only = request.form.get("sermon_only", "false").lower() == "true"
         any_bumpers = include_dynamic or include_stock
         default_dur = config.DEFAULT_BROADCAST_DURATION if any_bumpers else config.DEFAULT_TARGET_DURATION
         target_duration = request.form.get("target_duration", default_dur).strip()
@@ -142,6 +146,7 @@ def start_processing():
             job = Job(job_id, target_duration,
                       include_bumpers_dynamic=include_dynamic,
                       include_bumpers_stock=include_stock,
+                      sermon_only=sermon_only,
                       local_file=filepath)
             jobs[job_id] = job
 
@@ -158,9 +163,9 @@ def start_processing():
     else:
         data = request.get_json() or {}
         youtube_url = data.get("url", "").strip()
-        # Support both new flags and legacy include_bumpers
         include_dynamic = data.get("include_bumpers_dynamic", False)
         include_stock = data.get("include_bumpers_stock", False)
+        sermon_only = data.get("sermon_only", False)
         if data.get("include_bumpers") and not (include_dynamic or include_stock):
             include_dynamic = True
         any_bumpers = include_dynamic or include_stock
@@ -181,6 +186,7 @@ def start_processing():
     job = Job(job_id, target_duration,
               include_bumpers_dynamic=include_dynamic,
               include_bumpers_stock=include_stock,
+              sermon_only=sermon_only,
               youtube_url=youtube_url)
     jobs[job_id] = job
 

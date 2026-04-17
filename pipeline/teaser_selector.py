@@ -90,8 +90,18 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
     if status_callback:
         status_callback("Selecting teaser clip for radio intro...")
 
-    # Build transcript of just the sermon portion (excluding first/last 2 minutes)
-    buffer = 120  # avoid first and last 2 minutes
+    # Build transcript of just the sermon portion.
+    # Use a buffer to avoid the first/last portion of the sermon (opening
+    # greetings or closing wrap-up rarely make compelling teasers).
+    # Buffer scales with sermon length: 2 min for long sermons, less for short.
+    sermon_duration = sermon_end - sermon_start
+    if sermon_duration < 600:  # < 10 min — tiny buffer
+        buffer = 30
+    elif sermon_duration < 1200:  # 10-20 min — moderate buffer
+        buffer = 60
+    else:  # 20+ min — full 2 min buffer
+        buffer = 120
+
     seg_start = sermon_start + buffer
     seg_end = sermon_end - buffer
 
