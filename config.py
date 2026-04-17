@@ -5,7 +5,16 @@ load_dotenv()
 
 # Claude API
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+
+# Per-task model selection — different tasks have different needs.
+# Boundary detection is mechanical (find start/end), Sonnet handles fine.
+# Teaser selection requires more "taste" — Opus can pick more compelling clips
+# and copy text more reliably verbatim, reducing retries.
+CLAUDE_MODEL_BOUNDARY = os.getenv("CLAUDE_MODEL_BOUNDARY", "claude-sonnet-4-20250514")
+CLAUDE_MODEL_TEASER = os.getenv("CLAUDE_MODEL_TEASER", "claude-opus-4-7")
+
+# Legacy fallback — if old code references CLAUDE_MODEL, use boundary model
+CLAUDE_MODEL = CLAUDE_MODEL_BOUNDARY
 
 # Transcription: "local" for faster-whisper on CPU, "cloud" for OpenAI Whisper API
 TRANSCRIBER = os.getenv("TRANSCRIBER", "cloud")
@@ -31,7 +40,7 @@ INTRO_PATH = os.path.join(ASSETS_DIR, "intro.mp3")
 OUTRO_PATH = os.path.join(ASSETS_DIR, "outro.mp3")
 
 # Teaser window in the intro (seconds)
-TEASER_WINDOW_START = 12.0
+TEASER_WINDOW_START = 18.0
 TEASER_WINDOW_END = 35.0
 
 # Silence manipulation thresholds

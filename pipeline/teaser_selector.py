@@ -133,7 +133,7 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
                 user_message += f"\n\n{previous_attempts_note}"
 
             response = client.messages.create(
-                model=config.CLAUDE_MODEL,
+                model=config.CLAUDE_MODEL_TEASER,
                 max_tokens=512,
                 system=TEASER_PROMPT,
                 messages=[{"role": "user", "content": user_message}],

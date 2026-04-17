@@ -408,7 +408,7 @@ def detect_boundaries(transcript_data: dict, status_callback=None) -> dict:
 
     try:
         response = client.messages.create(
-            model=config.CLAUDE_MODEL,
+            model=config.CLAUDE_MODEL_BOUNDARY,
             max_tokens=1024,
             system=BOUNDARY_PROMPT,
             messages=[
