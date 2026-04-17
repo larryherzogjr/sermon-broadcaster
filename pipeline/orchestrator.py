@@ -380,10 +380,15 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
             )
             result["teaser"] = teaser_info
 
-            # Extract teaser from the same audio file Whisper transcribed
+            # Extract teaser from the same audio file Whisper transcribed.
+            # Add a 250ms pre-roll before the start — Whisper word timestamps
+            # mark where a word is DETECTED (mid-word onset), which is often
+            # slightly after the actual audio onset. Without this pre-roll,
+            # the first word of the teaser can be clipped.
             import subprocess as _sp
             teaser_audio_path = os.path.join(work_dir, "teaser.wav")
-            t_start = max(0, teaser_info["teaser_start"])
+            PRE_ROLL = 0.25
+            t_start = max(0, teaser_info["teaser_start"] - PRE_ROLL)
             t_end = teaser_info["teaser_end"]
             teaser_dur = t_end - t_start
 
@@ -403,7 +408,7 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
             import soundfile as sf
             logger.info(
                 f"Teaser extracted from {os.path.basename(teaser_source_path)}: "
-                f"{t_start:.1f}s - {t_end:.1f}s ({teaser_dur:.1f}s)"
+                f"{t_start:.1f}s - {t_end:.1f}s ({teaser_dur:.1f}s, with {PRE_ROLL*1000:.0f}ms pre-roll)"
             )
 
             # Mix teaser into intro
