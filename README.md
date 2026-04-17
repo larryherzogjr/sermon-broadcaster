@@ -2,7 +2,7 @@
 
 A Flask web app that converts church service videos into broadcast-ready radio audio. Automatically identifies the sermon within a full service, fits it to a target broadcast duration, and optionally wraps it with intro and outro bumpers (with either an AI-selected dynamic teaser or a pre-mixed stock teaser).
 
-Built for [Grace Free Lutheran Church](https://gracefreelutheranchurch.org/) to streamline weekly sermon preparation for local radio broadcast.
+Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline weekly sermon preparation for local radio broadcast.
 
 ## Features
 
