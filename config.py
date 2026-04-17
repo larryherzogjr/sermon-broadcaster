@@ -40,7 +40,7 @@ INTRO_PATH = os.path.join(ASSETS_DIR, "intro.mp3")
 OUTRO_PATH = os.path.join(ASSETS_DIR, "outro.mp3")
 
 # Teaser window in the intro (seconds)
-TEASER_WINDOW_START = 18.0
+TEASER_WINDOW_START = 12.0
 TEASER_WINDOW_END = 35.0
 
 # Silence manipulation thresholds
