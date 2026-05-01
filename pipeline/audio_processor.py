@@ -99,6 +99,86 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str)
     return output_path
 
 
+def remove_segment(audio_path: str, remove_start: float, remove_end: float,
+                   output_path: str, crossfade_ms: int = 50) -> str:
+    """Remove a time segment from the middle of an audio file.
+
+    Concatenates the audio before remove_start with the audio after remove_end,
+    using a short crossfade to avoid clicks at the splice point.
+
+    Args:
+        audio_path: Source audio file
+        remove_start: Time (seconds) where the unwanted segment begins
+        remove_end: Time (seconds) where the unwanted segment ends
+        output_path: Where to write the spliced audio
+        crossfade_ms: Crossfade duration at the splice point (default 50ms)
+
+    Returns:
+        output_path
+    """
+    info = sf.info(audio_path)
+    sr = info.samplerate
+
+    data, sr = sf.read(audio_path, dtype='float64')
+
+    # Convert to mono if stereo
+    if len(data.shape) > 1:
+        data = data.mean(axis=1)
+
+    remove_start_sample = int(remove_start * sr)
+    remove_end_sample = int(remove_end * sr)
+
+    # Bounds check
+    remove_start_sample = max(0, min(remove_start_sample, len(data)))
+    remove_end_sample = max(remove_start_sample, min(remove_end_sample, len(data)))
+
+    crossfade_samples = int(crossfade_ms / 1000.0 * sr)
+
+    # Get the two parts: before and after the removed segment
+    before = data[:remove_start_sample]
+    after = data[remove_end_sample:]
+
+    if len(before) == 0:
+        # Nothing before — just use after
+        result = after
+    elif len(after) == 0:
+        # Nothing after — just use before
+        result = before
+    elif crossfade_samples > 0 and len(before) > crossfade_samples and len(after) > crossfade_samples:
+        # Apply crossfade at the splice point
+        # Take the last crossfade_samples of "before" and fade them down
+        # Take the first crossfade_samples of "after" and fade them up
+        # Mix them to create a smooth transition
+        fade_out = np.linspace(1.0, 0.0, crossfade_samples)
+        fade_in = np.linspace(0.0, 1.0, crossfade_samples)
+
+        before_tail = before[-crossfade_samples:].copy() * fade_out
+        after_head = after[:crossfade_samples].copy() * fade_in
+        crossfade_region = before_tail + after_head
+
+        result = np.concatenate([
+            before[:-crossfade_samples],
+            crossfade_region,
+            after[crossfade_samples:],
+        ])
+    else:
+        # No crossfade — just hard splice
+        result = np.concatenate([before, after])
+
+    # Clip to prevent any overflow from the crossfade
+    result = np.clip(result, -1.0, 1.0)
+
+    sf.write(output_path, result, sr, subtype='PCM_16')
+
+    removed_duration = remove_end - remove_start
+    final_duration = len(result) / sr
+    logger.info(
+        f"Removed segment {remove_start:.2f}s - {remove_end:.2f}s "
+        f"({removed_duration:.2f}s removed); output {final_duration:.1f}s"
+    )
+    return output_path
+
+
 def detect_pauses(audio_path: str, min_silence_ms: int = 300, silence_thresh_db: float = -30.0) -> list:
     """
     Detect pauses/silences in the audio using energy-based detection.

@@ -354,6 +354,47 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
 
         result["timing"]["extract"] = time.time() - t0
 
+        # Stage 4.5: Splice out seating cue if detected
+        # ("you may be seated" / "please be seated" between scripture and sermon)
+        seating_start_orig = boundaries.get("seating_cue_start")
+        seating_end_orig = boundaries.get("seating_cue_end")
+
+        if seating_start_orig is not None and seating_end_orig is not None:
+            # The extracted sermon audio added a 500ms pre-roll buffer at the start
+            # (see extract_segment in audio_processor.py). So the time mapping is:
+            #   extracted_time = original_time - (sermon_start - 0.5)
+            extract_pre_roll = 0.5
+            extract_origin = boundaries["sermon_start"] - extract_pre_roll
+            seating_start_in_extract = seating_start_orig - extract_origin
+            seating_end_in_extract = seating_end_orig - extract_origin
+
+            from pipeline.audio_processor import remove_segment
+
+            sermon_spliced_path = os.path.join(work_dir, "sermon_spliced.wav")
+            try:
+                remove_segment(
+                    sermon_audio_path,
+                    seating_start_in_extract,
+                    seating_end_in_extract,
+                    sermon_spliced_path,
+                )
+                # Use the spliced audio going forward
+                sermon_audio_path = sermon_spliced_path
+                removed_dur = seating_end_orig - seating_start_orig
+                if status_callback:
+                    status_callback(
+                        f"Removed seating cue: {removed_dur:.1f}s spliced out"
+                    )
+                logger.info(
+                    f"Seating cue spliced out: "
+                    f"{seating_start_in_extract:.2f}s - {seating_end_in_extract:.2f}s "
+                    f"in extracted audio ({removed_dur:.2f}s removed)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to splice seating cue (non-fatal, continuing): {e}"
+                )
+
         # Stage 5: Fit sermon to target duration
         t0 = time.time()
         sermon_fitted_path = os.path.join(work_dir, "sermon_fitted.mp3")

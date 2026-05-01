@@ -14,16 +14,41 @@ BOUNDARY_PROMPT = """You are an expert at analyzing church service transcripts t
 
 You will receive a timestamped transcript of a full church service. Your job is to identify:
 
-1. The SERMON START — the moment the pastor/preacher begins the actual sermon message. This is NOT:
+1. The SERMON START — the moment the SCRIPTURE READING for the sermon begins.
+   The broadcast includes the scripture reading AND the sermon body that follows.
+   Just before the scripture reading, the pastor typically asks the congregation to stand:
+     - "Please stand for the reading of God's Word"
+     - "Let us stand for the reading of God's Word"
+     - "Please rise"
+   The sermon_start should be set to the START of the scripture reading itself,
+   AFTER the "please stand" / "let us stand" cue ends.
+   This is NOT:
    - Welcome/announcements
-   - Opening prayer (before the sermon)
-   - Scripture reading before the sermon (unless the pastor is clearly transitioning into teaching during the reading)
+   - Opening prayer (before the scripture reading)
    - Hymns or worship
    - Offering
-   Look for cues like: introduction of the sermon topic, "turn with me to...", "today we're going to look at...", or the transition from preliminary remarks into sustained expository or topical teaching.
-   IMPORTANT: Use the timestamp of the BEGINNING of the segment where the sermon starts (the start time, not the end time). This ensures we capture the first word.
+   - The "please stand" cue itself (we want to skip past this)
 
-2. TWO SERMON END POINTS — you must provide both:
+   IMPORTANT: Use the timestamp of the BEGINNING of the scripture reading
+   (after the standing cue completes). This ensures we capture the first word
+   of scripture cleanly without the standing cue.
+
+2. SEATING CUE — between the scripture reading and the sermon body, the pastor
+   typically tells the congregation to sit:
+     - "You may be seated"
+     - "Please be seated"
+     - "You may sit down"
+     - "Be seated, please"
+   Identify this cue's timestamps so the system can splice it out.
+
+   - seating_cue_start: timestamp of the BEGINNING of the seating cue phrase
+   - seating_cue_end: timestamp of the END of the seating cue phrase (so audio
+     resumes cleanly with the sermon body)
+
+   If no clear seating cue is present (e.g., the pastor flows directly from
+   scripture into preaching), set both to null.
+
+3. TWO SERMON END POINTS — you must provide both:
 
    a) sermon_end_with_prayer — the end of the closing prayer's "Amen."
       - This is the prayer the pastor prays to conclude the sermon.
@@ -40,16 +65,20 @@ You will receive a timestamped transcript of a full church service. Your job is 
 Respond ONLY with a JSON object in this exact format (no markdown, no extra text):
 {
     "sermon_start": 123.45,
+    "seating_cue_start": 145.20,
+    "seating_cue_end": 147.80,
     "sermon_end_with_prayer": 2400.00,
     "sermon_end_without_prayer": 2345.67,
     "confidence": "high",
-    "start_reason": "Brief explanation of why you chose this start point",
+    "start_reason": "Brief explanation — quote the first few words of scripture reading in single quotes",
+    "seating_cue_reason": "The exact phrase used (or null if no seating cue present)",
     "end_with_prayer_reason": "Brief explanation — what the closing Amen is",
     "end_without_prayer_reason": "The last substantive sentence before prayer transition",
     "sermon_title_guess": "Your best guess at the sermon title/topic based on content"
 }
 
 All times are in seconds (float). Confidence should be "high", "medium", or "low".
+If no seating cue is present, set seating_cue_start and seating_cue_end to null.
 If you cannot identify a sermon in the transcript, respond with:
 {
     "error": "Explanation of why sermon boundaries could not be determined"
@@ -348,7 +377,73 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
         f"[REFINE] Final: end_with={boundaries['sermon_end_with_prayer']:.1f}, "
         f"end_without={boundaries['sermon_end_without_prayer']:.1f}"
     )
-    
+
+    # ── Refine SEATING CUE if present ────────────────────────────────
+    seating_start = boundaries.get("seating_cue_start")
+    seating_end = boundaries.get("seating_cue_end")
+    if seating_start is not None and seating_end is not None:
+        # Search for the seating cue phrase in the word stream
+        # Look for variations: "you may be seated", "please be seated",
+        # "you may sit", "be seated"
+        seating_phrases = [
+            ["you", "may", "be", "seated"],
+            ["please", "be", "seated"],
+            ["you", "may", "sit", "down"],
+            ["you", "may", "sit"],
+            ["be", "seated", "please"],
+            ["be", "seated"],
+        ]
+
+        # Search window: from sermon_start to ~5 minutes after, since the
+        # seating cue is between the scripture reading and the sermon body
+        search_start = boundaries["sermon_start"]
+        search_end = min(boundaries["sermon_start"] + 600,
+                         boundaries["sermon_end_with_prayer"])
+
+        normalized_words = []
+        for w in words:
+            if search_start <= w["start"] <= search_end:
+                normalized_words.append({
+                    "word": w["word"].lower().strip(".,!?;:'\""),
+                    "start": w["start"],
+                    "end": w["end"],
+                })
+
+        found = False
+        for phrase in seating_phrases:
+            n = len(phrase)
+            for i in range(len(normalized_words) - n + 1):
+                window = [normalized_words[i + j]["word"] for j in range(n)]
+                if window == phrase:
+                    # Found it — use these word timestamps
+                    refined_start = normalized_words[i]["start"]
+                    refined_end = normalized_words[i + n - 1]["end"]
+                    # Add a small buffer (100ms) on each side for clean cut
+                    refined_start = max(0, refined_start - 0.1)
+                    refined_end = refined_end + 0.1
+                    boundaries["seating_cue_start"] = refined_start
+                    boundaries["seating_cue_end"] = refined_end
+                    logger.info(
+                        f"[REFINE] Seating cue refined: "
+                        f"'{' '.join(phrase)}' at "
+                        f"{refined_start:.1f}s - {refined_end:.1f}s"
+                    )
+                    if status_callback:
+                        status_callback(
+                            f"Seating cue identified: '{' '.join(phrase)}' "
+                            f"at {refined_start:.0f}s - will be removed"
+                        )
+                    found = True
+                    break
+            if found:
+                break
+
+        if not found:
+            logger.warning(
+                "[REFINE] Could not locate seating cue phrase in word stream — "
+                "using Claude's timestamps as-is"
+            )
+
     return boundaries
 
 
