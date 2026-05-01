@@ -56,13 +56,19 @@ You will receive a timestamped transcript of a full church service. Your job is 
    (after the standing cue completes). This ensures we capture the first word
    of scripture cleanly without the standing cue.
 
-2. SEATING CUE — between the scripture reading and the sermon body, the pastor
-   typically tells the congregation to sit:
+2. SEATING CUE — between the SERMON scripture reading and the sermon body, the
+   pastor typically tells the congregation to sit:
      - "You may be seated"
      - "Please be seated"
      - "You may sit down"
      - "Be seated, please"
    Identify this cue's timestamps so the system can splice it out.
+
+   IMPORTANT: This must be the seating cue that occurs AFTER the SERMON
+   scripture reading (not after earlier liturgical readings). The seating cue
+   timestamp MUST fall between sermon_start and the start of the sermon body.
+   If the pastor tells people to sit after earlier readings (Psalm, Epistle, etc.),
+   ignore those — only the cue immediately before the sermon body matters.
 
    - seating_cue_start: timestamp of the BEGINNING of the seating cue phrase
    - seating_cue_end: timestamp of the END of the seating cue phrase (so audio
@@ -404,6 +410,29 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
     # ── Refine SEATING CUE if present ────────────────────────────────
     seating_start = boundaries.get("seating_cue_start")
     seating_end = boundaries.get("seating_cue_end")
+
+    # Reject seating cues that fall OUTSIDE the sermon range. Sometimes
+    # Claude returns a "you may be seated" from an earlier liturgical
+    # reading (Psalm, Epistle, etc.) that's not the sermon scripture.
+    if (seating_start is not None and seating_end is not None
+            and (seating_start < boundaries["sermon_start"]
+                 or seating_end > boundaries["sermon_end_with_prayer"])):
+        logger.warning(
+            f"[REFINE] Seating cue at {seating_start:.1f}s falls outside "
+            f"sermon range ({boundaries['sermon_start']:.1f}s - "
+            f"{boundaries['sermon_end_with_prayer']:.1f}s). "
+            f"Likely from an earlier liturgical reading. Ignoring."
+        )
+        if status_callback:
+            status_callback(
+                "Seating cue was outside sermon range (likely from earlier "
+                "reading) — ignoring"
+            )
+        boundaries["seating_cue_start"] = None
+        boundaries["seating_cue_end"] = None
+        seating_start = None
+        seating_end = None
+
     if seating_start is not None and seating_end is not None:
         # Search for the seating cue phrase in the word stream
         # Look for variations: "you may be seated", "please be seated",
@@ -467,8 +496,16 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
         if not found:
             logger.warning(
                 "[REFINE] Could not locate seating cue phrase in word stream — "
-                "using Claude's timestamps as-is"
+                "skipping splice (Claude's raw timestamps too unreliable)"
             )
+            # Clear the cue so the orchestrator skips the splice entirely.
+            # Better to keep the cue audible than to splice the wrong chunk.
+            boundaries["seating_cue_start"] = None
+            boundaries["seating_cue_end"] = None
+            if status_callback:
+                status_callback(
+                    "Seating cue not confirmed in word stream — leaving audio unchanged"
+                )
 
     return boundaries
 
