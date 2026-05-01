@@ -16,20 +16,43 @@ You will receive a timestamped transcript of a full church service. Your job is 
 
 1. The SERMON START — the moment the SCRIPTURE READING for the sermon begins.
    The broadcast includes the scripture reading AND the sermon body that follows.
-   Just before the scripture reading, the pastor typically asks the congregation to stand:
+
+   IMPORTANT — DISTINGUISHING THE SERMON SCRIPTURE FROM EARLIER READINGS:
+   Many services have multiple scripture readings (e.g., Old Testament, Psalm,
+   Epistle, Gospel) earlier in the service. The pastor may also ask the
+   congregation to stand for those readings. Those are NOT the sermon scripture.
+
+   The SERMON scripture reading is the one IMMEDIATELY BEFORE the sermon body.
+   You can identify it by these signs:
+   - It is followed (often after a "you may be seated" cue) by sustained
+     expository or topical preaching on that same passage
+   - The pastor frequently references the passage during the sermon
+   - It typically comes AFTER any earlier liturgical readings, hymns, offering,
+     pastoral prayer, etc.
+   - It is the LAST scripture reading before the sermon body
+
+   If unsure between two candidate readings, pick the one whose content the
+   pastor preaches on in the sermon body. Look at what the sermon is ABOUT and
+   match it to the reading.
+
+   Just before the sermon scripture reading, the pastor typically asks the
+   congregation to stand:
      - "Please stand for the reading of God's Word"
      - "Let us stand for the reading of God's Word"
      - "Please rise"
-   The sermon_start should be set to the START of the scripture reading itself,
-   AFTER the "please stand" / "let us stand" cue ends.
+   The sermon_start should be set to the START of the SERMON scripture reading
+   itself, AFTER the "please stand" / "let us stand" cue ends.
+
    This is NOT:
    - Welcome/announcements
-   - Opening prayer (before the scripture reading)
+   - Earlier scripture readings (OT, Psalm, Epistle, etc.) that are part of the
+     liturgy but not what the sermon is preached from
+   - Opening prayer (before any scripture)
    - Hymns or worship
    - Offering
    - The "please stand" cue itself (we want to skip past this)
 
-   IMPORTANT: Use the timestamp of the BEGINNING of the scripture reading
+   IMPORTANT: Use the timestamp of the BEGINNING of the sermon scripture reading
    (after the standing cue completes). This ensures we capture the first word
    of scripture cleanly without the standing cue.
 
@@ -394,11 +417,14 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
             ["be", "seated"],
         ]
 
-        # Search window: from sermon_start to ~5 minutes after, since the
-        # seating cue is between the scripture reading and the sermon body
-        search_start = boundaries["sermon_start"]
-        search_end = min(boundaries["sermon_start"] + 600,
-                         boundaries["sermon_end_with_prayer"])
+        # Search window: tight window around Claude's reported timestamp.
+        # Claude's segment-level timestamps can be off by 30-90 seconds, so we
+        # search ±2 minutes around its reported position to find the actual
+        # phrase. We DO NOT start from sermon_start because there may be
+        # earlier "be seated" cues during liturgical readings.
+        search_center = (seating_start + seating_end) / 2.0
+        search_start = max(boundaries["sermon_start"], search_center - 120)
+        search_end = min(boundaries["sermon_end_with_prayer"], search_center + 120)
 
         normalized_words = []
         for w in words:
