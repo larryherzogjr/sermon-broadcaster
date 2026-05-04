@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # ── Flask App ────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB upload limit
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024 * 1024  # 5 GB upload limit
 
 # Upload directory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
