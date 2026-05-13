@@ -23,13 +23,20 @@ Content requirements:
 - Prefer the pastor's own teaching over direct Bible verse reading.
 - Should NOT be from the very beginning or very end of the sermon.
 
+ABSOLUTE CRITICAL REQUIREMENT — VERBATIM COPYING:
+- teaser_text MUST be copied character-for-character from the transcript above.
+- DO NOT paraphrase, rewrite, fix grammar, clean up filler words, or "improve" the text.
+- DO NOT combine sentences from different parts of the sermon.
+- DO NOT change verb tense, pronouns, or any word.
+- The transcript may have transcription errors, repetitions, or odd phrasing — copy those exactly as they appear.
+- If a passage is too rough to use verbatim, pick a DIFFERENT passage. Do not "clean up" a rough one.
+- Your text will be searched in the transcript word-for-word. If the words don't match exactly, the system will fail.
+
 Respond ONLY with a JSON object (no markdown, no extra text):
 {
-    "teaser_text": "The EXACT verbatim words from the transcript. Copy directly without paraphrasing.",
+    "teaser_text": "EXACT verbatim words from the transcript. Copy from the transcript above. DO NOT rephrase.",
     "reason": "Brief explanation of why this clip was chosen"
-}
-
-CRITICAL: teaser_text must be copied VERBATIM from the transcript (character-for-character). The system will find the timestamps by searching for this exact text."""
+}"""
 
 
 def _snap_to_word_boundaries(teaser: dict, words: list) -> dict:
@@ -343,20 +350,74 @@ def _find_text_in_words(target_text: str, words: list,
             return start_time, end_time, "prefix"
 
     # STRATEGY 3: Window search (last resort - unreliable)
+    # When Claude paraphrases, the start/end positions can be way off.
+    # We try to find natural sentence boundaries near the matched window
+    # so we at least don't cut mid-word or mid-sentence.
     logger.warning("Prefix match failed, trying window search")
+
+    # Build a list of words with punctuation info (preserve original word
+    # with its punctuation for sentence-end detection)
+    raw_words_in_stream = [w["word"] for w in sermon_words]
+
+    def is_sentence_end(idx):
+        """Check if the word at idx ends with sentence-ending punctuation."""
+        if idx < 0 or idx >= len(raw_words_in_stream):
+            return False
+        w = raw_words_in_stream[idx].strip()
+        return w.endswith(".") or w.endswith("?") or w.endswith("!")
+
+    def find_next_sentence_end(start_idx, max_lookahead=40):
+        """Find the next sentence boundary forward from start_idx."""
+        end = min(len(raw_words_in_stream), start_idx + max_lookahead)
+        for i in range(start_idx, end):
+            if is_sentence_end(i):
+                return i
+        return None
+
+    def find_prev_sentence_start(end_idx, max_lookback=40):
+        """Find the start of the current sentence (just after the previous
+        sentence's ending punctuation)."""
+        start = max(0, end_idx - max_lookback)
+        for i in range(end_idx - 1, start - 1, -1):
+            if is_sentence_end(i):
+                return i + 1
+        return max(0, end_idx - max_lookback)
+
     for window_size in [5, 4]:
         for offset in range(target_len - window_size + 1):
             window = target_words[offset:offset + window_size]
             match_idx = find_sequence(window)
             if match_idx is not None:
-                est_start_idx = max(0, match_idx - offset)
-                est_end_idx = min(len(sermon_words) - 1, match_idx + (target_len - offset) - 1)
+                # Naive estimate first
+                naive_start = max(0, match_idx - offset)
+                naive_end = min(len(sermon_words) - 1,
+                                match_idx + (target_len - offset) - 1)
+
+                # Snap start back to the beginning of its sentence
+                est_start_idx = find_prev_sentence_start(naive_start + 1, max_lookback=30)
+
+                # Snap end forward to the next sentence-ending punctuation,
+                # but cap the duration at ~22 seconds worth of words
+                target_max_duration = 22.0
+                est_start_time = sermon_words[est_start_idx]["start"]
+                next_end = find_next_sentence_end(naive_end, max_lookahead=30)
+                if next_end is not None:
+                    # Check duration constraint
+                    if sermon_words[next_end]["end"] - est_start_time <= target_max_duration:
+                        est_end_idx = next_end
+                    else:
+                        # Too long — use naive end and accept slight mid-sentence
+                        est_end_idx = naive_end
+                else:
+                    est_end_idx = naive_end
+
                 start_time = sermon_words[est_start_idx]["start"]
                 end_time = sermon_words[est_end_idx]["end"] + 0.2
                 logger.info(
                     f"Teaser matched via WINDOW ({window_size} words at target offset {offset}): "
                     f"'{sermon_words[est_start_idx]['word']}' -> "
-                    f"'{sermon_words[est_end_idx]['word']}'"
+                    f"'{sermon_words[est_end_idx]['word']}' "
+                    f"(snapped to sentence boundaries)"
                 )
                 return start_time, end_time, "window"
 
