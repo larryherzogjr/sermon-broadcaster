@@ -169,31 +169,33 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
         # Take the first quoted phrase and extract words for matching
         first_phrase = quoted[0]
         all_search_words = first_phrase.lower().split()[:6]
-        
+
         logger.info(f"[REFINE] Sermon start phrase: '{first_phrase[:50]}...'")
-        
-        # Search for this sequence in the word timestamps near Claude's start
-        search_begin = sermon_start - 60
-        search_end = sermon_start + 60
-        
+
+        # Search for this sequence in the word timestamps near Claude's start.
+        # Use a wider window (±180s) since Claude's segment timestamps can be
+        # off by minutes when there's a hymn/musical interlude near the start.
+        search_begin = sermon_start - 180
+        search_end = sermon_start + 180
+
         # Try progressively shorter matches: 5 words, 4, 3, then 2
         for match_len in range(min(5, len(all_search_words)), 1, -1):
             search_words = all_search_words[:match_len]
-            
+
             for i, w in enumerate(words):
                 if w["start"] < search_begin or w["start"] > search_end:
                     continue
-                
+
                 if i + match_len > len(words):
                     continue
-                
+
                 candidate = [
                     words[i + j]["word"].lower().strip(".,!?;:'\"")
                     for j in range(match_len)
                 ]
-                
+
                 target = [sw.strip(".,!?;:'\"") for sw in search_words]
-                
+
                 if candidate == target:
                     new_start = words[i]["start"] - 0.3
                     old_start = boundaries["sermon_start"]
@@ -209,10 +211,10 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
                             f"Refined start: '{first_phrase[:40]}...' at {words[i]['start']:.0f}s"
                         )
                     break
-            
+
             if start_refined:
                 break
-        
+
         if not start_refined:
             # Log what words ARE near Claude's start for debugging
             nearby = [
@@ -224,38 +226,61 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
                 f"'{' '.join(nearby[:15])}'"
             )
             logger.info("[REFINE] Trying gap detection fallback")
-    
-    # Fallback: gap-based detection if word matching didn't work
+
+    # Fallback: gap-based detection if word matching didn't work.
+    # Use a wider window and look for the LARGEST gap (most likely the
+    # hymn-to-speech transition).
     if not start_refined:
-        start_search_begin = sermon_start - 30
-        start_search_end = sermon_start + 30
-        
+        start_search_begin = sermon_start - 120
+        start_search_end = sermon_start + 120
+
         start_region_words = [
             (i, w) for i, w in enumerate(words)
             if start_search_begin <= w["start"] <= start_search_end
         ]
-        
+
         if start_region_words:
-            # Look for a silence gap > 1.5s near Claude's start point
+            # Find the LARGEST silence gap in the region, prefer ones close to
+            # but before Claude's reported start time
+            best_gap = 0
+            best_idx = None
             for k in range(len(start_region_words) - 1):
                 idx_a, word_a = start_region_words[k]
                 idx_b, word_b = start_region_words[k + 1]
                 gap = word_b["start"] - word_a["end"]
-                
-                if gap >= 1.5 and word_b["start"] >= sermon_start - 5:
-                    new_start = words[idx_b]["start"] - 0.3
-                    old_start = boundaries["sermon_start"]
-                    boundaries["sermon_start"] = new_start
-                    start_refined = True
-                    logger.info(
-                        f"[REFINE] Start gap: {gap:.1f}s silence, "
-                        f"speech at {word_b['start']:.1f}s ('{word_b['word']}') "
-                        f"(was {old_start:.1f}s)"
+
+                # Require at least 2s gap (longer than typical word spacing
+                # even in slow speech, but shorter than a service transition)
+                if gap >= 2.0 and gap > best_gap:
+                    best_gap = gap
+                    best_idx = idx_b
+
+            if best_idx is not None:
+                new_start = words[best_idx]["start"] - 0.3
+                old_start = boundaries["sermon_start"]
+                boundaries["sermon_start"] = new_start
+                start_refined = True
+                logger.info(
+                    f"[REFINE] Start gap (widest): {best_gap:.1f}s silence, "
+                    f"speech resumes at {words[best_idx]['start']:.1f}s "
+                    f"('{words[best_idx]['word']}') (was {old_start:.1f}s)"
+                )
+                if status_callback:
+                    status_callback(
+                        f"Refined start via silence gap ({best_gap:.1f}s) at "
+                        f"{words[best_idx]['start']:.0f}s"
                     )
-                    break
-        
+
         if not start_refined:
-            logger.warning("[REFINE] Could not refine start — keeping Claude's endpoint")
+            logger.warning(
+                "[REFINE] Could not refine start — keeping Claude's endpoint "
+                "(may include singing or silence before the sermon)"
+            )
+            if status_callback:
+                status_callback(
+                    "WARNING: Could not pinpoint sermon start — output may "
+                    "include singing or silence at the beginning"
+                )
     
     # ── Refine END boundaries ────────────────────────────────────────
     # Search the last 40% of the sermon for all markers

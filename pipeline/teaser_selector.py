@@ -341,6 +341,38 @@ def _find_text_in_words(target_text: str, words: list,
         start_idx = find_sequence(target_words[:prefix_len])
         if start_idx is not None:
             end_idx = _find_end_position(start_idx, target_words, normalized_stream)
+
+            # If we matched a SMALL prefix (e.g., 17 of 48 words), Claude likely
+            # paraphrased the rest. The end position came from word count, which
+            # is unreliable. Snap forward to the next sentence-ending punctuation
+            # so we end at a natural boundary rather than mid-sentence.
+            if prefix_len < target_len * 0.7:
+                raw_words_in_stream = [w["word"] for w in sermon_words]
+
+                def is_sentence_end(idx):
+                    if idx < 0 or idx >= len(raw_words_in_stream):
+                        return False
+                    w = raw_words_in_stream[idx].strip()
+                    return w.endswith(".") or w.endswith("?") or w.endswith("!")
+
+                start_time_check = sermon_words[start_idx]["start"]
+                target_max_duration = 22.0
+
+                # Look forward from end_idx for sentence-ending punctuation
+                lookahead_max = min(len(sermon_words),
+                                    end_idx + 30)
+                for j in range(end_idx, lookahead_max):
+                    if is_sentence_end(j):
+                        # Check duration constraint
+                        if sermon_words[j]["end"] - start_time_check <= target_max_duration:
+                            end_idx = j
+                            logger.info(
+                                f"Prefix match was partial ({prefix_len}/{target_len} "
+                                f"words); snapped end to sentence boundary at "
+                                f"'{sermon_words[j]['word']}'"
+                            )
+                            break
+
             start_time = sermon_words[start_idx]["start"]
             end_time = sermon_words[end_idx]["end"] + 0.2
             logger.info(
