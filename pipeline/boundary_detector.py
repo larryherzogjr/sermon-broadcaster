@@ -17,23 +17,42 @@ You will receive a timestamped transcript of a full church service. Your job is 
 1. The SERMON START — the moment the SCRIPTURE READING for the sermon begins.
    The broadcast includes the scripture reading AND the sermon body that follows.
 
+   WHAT COUNTS AS THE SERMON SCRIPTURE READING:
+   The "sermon scripture reading" is a FORMAL READING from the Bible done
+   BEFORE the sermon begins. It is typically:
+   - Read in a stately, deliberate manner (often verse-by-verse cadence)
+   - Announced beforehand (e.g., "Our text today is from Acts chapter 17,
+     verses 22 through 31" or "Please turn with me to...")
+   - Followed by sustained preaching ON that same passage
+   - Usually preceded by a "please stand" cue and followed by a "be seated" cue
+
+   WHAT IS NOT THE SERMON SCRIPTURE READING:
+   - The pastor PARAPHRASING or RECAPPING scripture within the sermon body
+     (e.g., "So Paul shares with them the God who made the world..." is the
+     pastor's own narration, NOT a scripture reading)
+   - The pastor QUOTING a verse mid-sermon for illustration
+   - The pastor REFERENCING a passage during preaching
+   - Earlier liturgical readings (Psalm, Epistle, OT reading) that are part
+     of worship but are NOT what the sermon is preached from
+
    IMPORTANT — DISTINGUISHING THE SERMON SCRIPTURE FROM EARLIER READINGS:
    Many services have multiple scripture readings (e.g., Old Testament, Psalm,
    Epistle, Gospel) earlier in the service. The pastor may also ask the
    congregation to stand for those readings. Those are NOT the sermon scripture.
 
-   The SERMON scripture reading is the one IMMEDIATELY BEFORE the sermon body.
-   You can identify it by these signs:
+   The SERMON scripture reading is the LAST formal Bible reading BEFORE the
+   sermon proper. You can identify it by these signs:
    - It is followed (often after a "you may be seated" cue) by sustained
      expository or topical preaching on that same passage
    - The pastor frequently references the passage during the sermon
    - It typically comes AFTER any earlier liturgical readings, hymns, offering,
      pastoral prayer, etc.
-   - It is the LAST scripture reading before the sermon body
+   - The text being read sounds like Bible verses (formal, scriptural language),
+     not the pastor's own conversational explanation
 
    If unsure between two candidate readings, pick the one whose content the
    pastor preaches on in the sermon body. Look at what the sermon is ABOUT and
-   match it to the reading.
+   match it to the FORMAL reading (not to mid-sermon paraphrases).
 
    Just before the sermon scripture reading, the pastor typically asks the
    congregation to stand:
@@ -43,6 +62,10 @@ You will receive a timestamped transcript of a full church service. Your job is 
    The sermon_start should be set to the START of the SERMON scripture reading
    itself, AFTER the "please stand" / "let us stand" cue ends.
 
+   IMPORTANT: Use the timestamp of the BEGINNING of the formal sermon scripture
+   reading. If no formal scripture reading occurs (pastor jumps straight into
+   preaching), use the START of the sermon proper.
+
    This is NOT:
    - Welcome/announcements
    - Earlier scripture readings (OT, Psalm, Epistle, etc.) that are part of the
@@ -51,10 +74,7 @@ You will receive a timestamped transcript of a full church service. Your job is 
    - Hymns or worship
    - Offering
    - The "please stand" cue itself (we want to skip past this)
-
-   IMPORTANT: Use the timestamp of the BEGINNING of the sermon scripture reading
-   (after the standing cue completes). This ensures we capture the first word
-   of scripture cleanly without the standing cue.
+   - Mid-sermon paraphrases or quotes of scripture by the pastor
 
 2. SEATING CUE — between the SERMON scripture reading and the sermon body, the
    pastor typically tells the congregation to sit:
