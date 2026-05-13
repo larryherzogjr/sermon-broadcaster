@@ -375,12 +375,51 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
                     f"before '{first_transition['phrase']}' ({first_transition['word']['start']:.0f}s)"
                 )
         else:
-            # No Amen before transition — cut before the transition itself
-            cut_word = words[first_transition["idx"] - 1]
-            boundaries["sermon_end_with_prayer"] = cut_word["end"] + 0.3
-            logger.info(f"[REFINE] No Amen before transition, cutting at {cut_word['end']:.1f}s")
-            if status_callback:
-                status_callback(f"No Amen found — cutting before '{first_transition['phrase']}'")
+            # No Amen before transition. Two possibilities:
+            #
+            # 1. Some services announce the closing hymn BEFORE the closing
+            #    prayer, so the actual prayer Amen comes AFTER the transition.
+            # 2. There genuinely is no closing prayer.
+            #
+            # Heuristic: if Claude's end_with_prayer_reason explicitly mentions
+            # an Amen / prayer / "Jesus' name", trust that a prayer exists and
+            # find the nearest Amen AFTER the transition (within 5 minutes).
+            end_reason = (boundaries.get("end_with_prayer_reason") or "").lower()
+            mentions_prayer = any(
+                kw in end_reason
+                for kw in ["amen", "prayer", "jesus' name", "jesus name", "in his name"]
+            )
+
+            late_amens = [
+                a for a in amens
+                if (a["word"]["end"] > first_transition["word"]["start"]
+                    and a["word"]["end"] < first_transition["word"]["start"] + 300)
+            ]
+
+            if mentions_prayer and late_amens:
+                # Prayer comes AFTER hymn announcement. Use the latest Amen in
+                # the 5-minute window (closing prayer Amen is typically the
+                # last one before the hymn actually starts being sung).
+                best_amen = late_amens[-1]
+                boundaries["sermon_end_with_prayer"] = best_amen["word"]["end"] + 0.5
+                logger.info(
+                    f"[REFINE] With-prayer: prayer follows hymn announcement. "
+                    f"Snapped to Amen at {best_amen['word']['start']:.1f}s "
+                    f"(transition was at {first_transition['word']['start']:.1f}s; "
+                    f"Claude's reason mentioned prayer)"
+                )
+                if status_callback:
+                    status_callback(
+                        f"Refined: prayer follows hymn announcement — Amen at "
+                        f"{best_amen['word']['start']:.0f}s"
+                    )
+            else:
+                # No Amen anywhere reasonable — cut before the transition itself
+                cut_word = words[first_transition["idx"] - 1]
+                boundaries["sermon_end_with_prayer"] = cut_word["end"] + 0.3
+                logger.info(f"[REFINE] No Amen before transition, cutting at {cut_word['end']:.1f}s")
+                if status_callback:
+                    status_callback(f"No Amen found — cutting before '{first_transition['phrase']}'")
     elif amens:
         # No transitions found, use Amen closest to Claude's endpoint
         best_amen = min(amens, key=lambda a: abs(a["word"]["end"] - end_with))
