@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>History — Sermon Broadcaster</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #1a1a1e;
+            --surface: #24242a;
+            --surface-raised: #2e2e36;
+            --border: #3a3a44;
+            --text: #e8e6e1;
+            --text-muted: #9a978f;
+            --accent: #c9a84c;
+            --accent-dim: #8a7333;
+            --green: #5a9a6a;
+            --red: #b05050;
+            --blue: #5a7a9a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Source Serif 4', Georgia, serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 3rem 1.5rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        header a {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+        header a:hover { color: var(--accent); }
+
+        .job-row {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .job-row .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .job-row .title {
+            font-size: 1.05rem;
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .job-row .date {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+        }
+
+        .badge {
+            display: inline-block;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            padding: 0.18rem 0.55rem;
+            border-radius: 3px;
+            margin-left: 0.25rem;
+        }
+        .badge.complete { background: var(--green); color: #fff; }
+        .badge.failed   { background: var(--red);   color: #fff; }
+        .badge.feedback-none       { background: var(--surface-raised); color: var(--text-muted); }
+        .badge.feedback-in_progress{ background: var(--blue); color: #fff; }
+        .badge.feedback-submitted  { background: var(--accent-dim); color: #fff; }
+
+        .actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 0.75rem;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 0.45rem 0.9rem;
+            border-radius: 4px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-decoration: none;
+            transition: background 0.2s, opacity 0.2s;
+        }
+        .btn-download {
+            background: var(--green);
+            color: #fff;
+        }
+        .btn-download:hover { background: #6aaa7a; }
+        .btn-download.disabled {
+            background: var(--surface-raised);
+            color: var(--text-muted);
+            cursor: not-allowed;
+            opacity: 0.6;
+            text-decoration: line-through;
+        }
+        .btn-feedback {
+            background: var(--accent);
+            color: var(--bg);
+        }
+        .btn-feedback:hover { background: #d4b358; }
+        .btn-feedback.submitted {
+            background: var(--surface-raised);
+            color: var(--accent);
+            border: 1px solid var(--accent-dim);
+        }
+
+        .empty {
+            text-align: center;
+            color: var(--text-muted);
+            font-style: italic;
+            padding: 3rem;
+        }
+
+        .meta {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Job History</h1>
+            <a href="/">&larr; Back to Broadcaster</a>
+        </header>
+
+        <div id="list">
+            <div class="empty">Loading…</div>
+        </div>
+    </div>
+
+    <script>
+        const VARIANT_LABELS = {
+            'dynamic': 'Dynamic Teaser',
+            'stock': 'Stock Teaser',
+            'sermon-only': 'Sermon Only',
+        };
+
+        function escHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        function fmtDate(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return iso;
+            return d.toLocaleString();
+        }
+
+        function renderRow(job) {
+            const r = job.result || {};
+            const b = r.boundaries || {};
+            const title = b.sermon_title_guess || job.source || '(no title)';
+            const statusClass = job.status === 'complete' ? 'complete' : 'failed';
+
+            const fb = job.feedback || { status: 'none' };
+            const fbLabel = {
+                'none': 'No Feedback',
+                'in_progress': 'Feedback in Progress',
+                'submitted': 'Feedback Submitted',
+            }[fb.status] || fb.status;
+
+            const outputs = (r.outputs || []);
+            const downloadHtml = outputs.map(out => {
+                const label = VARIANT_LABELS[out.variant] || out.variant || 'Download';
+                if (out.available) {
+                    return `<a class="btn btn-download" href="/api/download/${encodeURIComponent(out.filename)}">${escHtml(label)}</a>`;
+                }
+                return `<span class="btn btn-download disabled" title="File expired or removed">${escHtml(label)} (expired)</span>`;
+            }).join('');
+
+            let feedbackBtn = '';
+            if (job.status === 'complete') {
+                if (fb.status === 'none') {
+                    feedbackBtn = `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Submit Feedback</a>`;
+                } else if (fb.status === 'in_progress') {
+                    feedbackBtn = `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Continue Feedback</a>`;
+                } else if (fb.status === 'submitted' && fb.issue_url) {
+                    feedbackBtn = `<a class="btn btn-feedback submitted" href="${escHtml(fb.issue_url)}" target="_blank" rel="noopener">View Issue &rarr;</a>`;
+                }
+            }
+
+            return `
+                <div class="job-row">
+                    <div class="top">
+                        <div>
+                            <div class="title">${escHtml(title)}</div>
+                            <div class="meta">
+                                job ${escHtml(job.job_id)} &middot; target ${escHtml(job.target_duration)}
+                                <span class="badge ${statusClass}">${escHtml(job.status)}</span>
+                                <span class="badge feedback-${fb.status}">${escHtml(fbLabel)}</span>
+                            </div>
+                        </div>
+                        <div class="date">${escHtml(fmtDate(job.created_at))}</div>
+                    </div>
+                    <div class="actions">
+                        ${downloadHtml}
+                        ${feedbackBtn}
+                    </div>
+                </div>
+            `;
+        }
+
+        fetch('/api/history')
+            .then(r => r.json())
+            .then(jobs => {
+                const list = document.getElementById('list');
+                if (!jobs.length) {
+                    list.innerHTML = '<div class="empty">No jobs yet.</div>';
+                    return;
+                }
+                list.innerHTML = jobs.map(renderRow).join('');
+            })
+            .catch(err => {
+                document.getElementById('list').innerHTML =
+                    `<div class="empty">Failed to load history: ${escHtml(err.message)}</div>`;
+            });
+    </script>
+</body>
+</html>

@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feedback — Sermon Broadcaster</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #1a1a1e;
+            --surface: #24242a;
+            --surface-raised: #2e2e36;
+            --border: #3a3a44;
+            --text: #e8e6e1;
+            --text-muted: #9a978f;
+            --accent: #c9a84c;
+            --accent-dim: #8a7333;
+            --green: #5a9a6a;
+            --red: #b05050;
+            --blue: #5a7a9a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Source Serif 4', Georgia, serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 2.5rem 1.5rem 4rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1.25rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+        }
+
+        header a {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+        header a:hover { color: var(--accent); }
+
+        .sub {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            margin-top: 0.25rem;
+        }
+
+        #conversation {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .bubble {
+            padding: 0.85rem 1.1rem;
+            border-radius: 12px;
+            max-width: 85%;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .bubble .who {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.62rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 0.3rem;
+        }
+
+        .bubble.assistant {
+            align-self: flex-start;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 3px;
+        }
+        .bubble.user {
+            align-self: flex-end;
+            background: var(--surface-raised);
+            border: 1px solid var(--accent-dim);
+            border-bottom-right-radius: 3px;
+        }
+
+        .bubble .ts {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 0.45rem;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 0.6rem;
+            margin-top: 0.5rem;
+        }
+
+        textarea {
+            flex: 1;
+            min-height: 70px;
+            padding: 0.75rem 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-size: 0.95rem;
+            resize: vertical;
+        }
+        textarea:focus { outline: none; border-color: var(--accent); }
+
+        button {
+            padding: 0 1.4rem;
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 4px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            cursor: pointer;
+        }
+        button:hover { background: #d4b358; }
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .summary-editor {
+            background: var(--surface);
+            border: 1px solid var(--accent-dim);
+            border-radius: 6px;
+            padding: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .summary-editor h2 {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 1rem;
+        }
+
+        .field { margin-bottom: 1rem; }
+        .field label {
+            display: block;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.68rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 0.35rem;
+        }
+        .field input[type=text], .field select, .field textarea {
+            width: 100%;
+            padding: 0.6rem 0.85rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.85rem;
+        }
+        .field textarea {
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-size: 0.95rem;
+            min-height: 200px;
+        }
+        .field input:focus, .field select:focus, .field textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .submitted-banner {
+            background: var(--surface);
+            border: 1px solid var(--green);
+            border-radius: 6px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .submitted-banner .label {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--green);
+            margin-bottom: 0.4rem;
+        }
+        .submitted-banner a {
+            color: var(--accent);
+            text-decoration: none;
+            word-break: break-all;
+        }
+        .submitted-banner a:hover { text-decoration: underline; }
+
+        .error {
+            background: rgba(176, 80, 80, 0.12);
+            border: 1px solid var(--red);
+            border-radius: 4px;
+            color: var(--red);
+            padding: 0.75rem 1rem;
+            margin: 1rem 0;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        .typing {
+            color: var(--text-muted);
+            font-style: italic;
+            font-size: 0.9rem;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.4rem;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1 id="title">Feedback</h1>
+                <div class="sub" id="subTitle">job {{ job_id }}</div>
+            </div>
+            <a href="/history">&larr; History</a>
+        </header>
+
+        <div id="submittedBanner" class="submitted-banner" style="display:none;">
+            <div class="label">Feedback submitted</div>
+            <div>This feedback has been filed as a GitHub issue:<br>
+                <a id="issueLink" href="#" target="_blank" rel="noopener"></a>
+            </div>
+        </div>
+
+        <div id="errorBox" class="error" style="display:none;"></div>
+
+        <div id="conversation"></div>
+
+        <div id="typing" class="typing" style="display:none;">
+            <span class="spinner"></span> Claude is thinking…
+        </div>
+
+        <div id="inputArea" class="input-row" style="display:none;">
+            <textarea id="userInput" placeholder="Your reply…"></textarea>
+            <button id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+
+        <div id="summaryEditor" class="summary-editor" style="display:none;">
+            <h2>Proposed Summary</h2>
+            <div class="field">
+                <label for="sumTitle">Title</label>
+                <input type="text" id="sumTitle">
+            </div>
+            <div class="field">
+                <label for="sumSeverity">Severity</label>
+                <select id="sumSeverity">
+                    <option value="low">low</option>
+                    <option value="medium" selected>medium</option>
+                    <option value="high">high</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="sumBody">Body</label>
+                <textarea id="sumBody"></textarea>
+            </div>
+            <button id="submitBtn" onclick="submitFeedback()">Submit to GitHub</button>
+        </div>
+    </div>
+
+    <script>
+        const JOB_ID = {{ job_id | tojson }};
+        const JOB_TITLE = {{ (((job.get('result') or {}).get('boundaries') or {}).get('sermon_title_guess') or job.get('source') or '') | tojson }};
+        let sessionId = null;
+        let isSubmitted = false;
+
+        function escHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        function setTitle() {
+            const title = JOB_TITLE || '(no title)';
+            document.getElementById('title').textContent = `Feedback: ${title}`;
+            document.getElementById('subTitle').textContent = `job ${JOB_ID}`;
+        }
+
+        function renderConversation(messages) {
+            const conv = document.getElementById('conversation');
+            conv.innerHTML = '';
+            messages.forEach(m => {
+                const div = document.createElement('div');
+                div.className = `bubble ${m.role}`;
+                div.innerHTML =
+                    `<div class="who">${m.role === 'assistant' ? 'Claude' : 'You'}</div>` +
+                    `<div>${escHtml(m.content)}</div>` +
+                    (m.ts ? `<div class="ts">${escHtml(m.ts)}</div>` : '');
+                conv.appendChild(div);
+            });
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        }
+
+        function showError(msg) {
+            const box = document.getElementById('errorBox');
+            box.textContent = msg;
+            box.style.display = 'block';
+        }
+        function clearError() {
+            document.getElementById('errorBox').style.display = 'none';
+        }
+
+        function showSummary(s) {
+            document.getElementById('inputArea').style.display = 'none';
+            const editor = document.getElementById('summaryEditor');
+            document.getElementById('sumTitle').value = s.title || `Feedback: ${JOB_TITLE || ''} (${JOB_ID})`;
+            document.getElementById('sumSeverity').value = s.severity || 'medium';
+            document.getElementById('sumBody').value = s.body || '';
+            editor.style.display = 'block';
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        }
+
+        function showSubmitted(issueUrl, messages) {
+            isSubmitted = true;
+            const banner = document.getElementById('submittedBanner');
+            const link = document.getElementById('issueLink');
+            link.href = issueUrl;
+            link.textContent = issueUrl;
+            banner.style.display = 'block';
+            document.getElementById('inputArea').style.display = 'none';
+            document.getElementById('summaryEditor').style.display = 'none';
+            if (messages) renderConversation(messages);
+        }
+
+        function setSending(sending) {
+            document.getElementById('sendBtn').disabled = sending;
+            document.getElementById('userInput').disabled = sending;
+            document.getElementById('typing').style.display = sending ? 'block' : 'none';
+        }
+
+        async function startSession() {
+            clearError();
+            try {
+                const r = await fetch(`/api/feedback/${encodeURIComponent(JOB_ID)}/start`, { method: 'POST' });
+                const data = await r.json();
+                if (data.error) { showError(data.error); return; }
+                sessionId = data.session_id;
+                renderConversation(data.messages || []);
+
+                if (data.status === 'submitted') {
+                    showSubmitted(data.github_issue_url || '#', data.messages || []);
+                    return;
+                }
+
+                // If the last assistant message contains a summary marker, show the editor.
+                // (This handles the case of resuming a session right after summary was proposed.)
+                const lastA = [...(data.messages || [])].reverse().find(m => m.role === 'assistant');
+                if (lastA && lastA.content.includes('---SUMMARY---')) {
+                    const parsed = parseSummaryFromText(lastA.content);
+                    if (parsed) showSummary(parsed);
+                    else document.getElementById('inputArea').style.display = 'flex';
+                } else {
+                    document.getElementById('inputArea').style.display = 'flex';
+                }
+            } catch (err) {
+                showError(err.message);
+            }
+        }
+
+        function parseSummaryFromText(text) {
+            const idx = text.indexOf('---SUMMARY---');
+            if (idx === -1) return null;
+            const tail = text.slice(idx + '---SUMMARY---'.length).trim();
+            const lines = tail.split('\n');
+            let severity = 'medium', title = '';
+            const bodyLines = [];
+            let sawSeverity = false, sawTitle = false;
+            for (const line of lines) {
+                if (!sawSeverity) {
+                    const m = line.match(/^\s*severity:\s*(low|medium|high)\s*$/i);
+                    if (m) { severity = m[1].toLowerCase(); sawSeverity = true; continue; }
+                }
+                if (!sawTitle) {
+                    const m = line.match(/^\s*title:\s*(.+)$/);
+                    if (m) { title = m[1].trim(); sawTitle = true; continue; }
+                }
+                bodyLines.push(line);
+            }
+            return { severity, title, body: bodyLines.join('\n').trim() };
+        }
+
+        async function sendMessage() {
+            const ta = document.getElementById('userInput');
+            const text = ta.value.trim();
+            if (!text || !sessionId) return;
+            clearError();
+            ta.value = '';
+
+            const conv = document.getElementById('conversation');
+            const userDiv = document.createElement('div');
+            userDiv.className = 'bubble user';
+            userDiv.innerHTML = `<div class="who">You</div><div>${escHtml(text)}</div>`;
+            conv.appendChild(userDiv);
+            setSending(true);
+
+            try {
+                const r = await fetch(`/api/feedback/${encodeURIComponent(sessionId)}/message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                });
+                const data = await r.json();
+                if (data.error) { setSending(false); showError(data.error); return; }
+
+                const aDiv = document.createElement('div');
+                aDiv.className = 'bubble assistant';
+                aDiv.innerHTML = `<div class="who">Claude</div><div>${escHtml(data.assistant_text)}</div>`;
+                conv.appendChild(aDiv);
+                setSending(false);
+
+                if (data.summary_proposed && data.summary) {
+                    showSummary(data.summary);
+                }
+                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            } catch (err) {
+                setSending(false);
+                showError(err.message);
+            }
+        }
+
+        async function submitFeedback() {
+            if (!sessionId) return;
+            const title = document.getElementById('sumTitle').value.trim();
+            const severity = document.getElementById('sumSeverity').value;
+            const body = document.getElementById('sumBody').value.trim();
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.textContent = 'Submitting…';
+            clearError();
+            try {
+                const r = await fetch(`/api/feedback/${encodeURIComponent(sessionId)}/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ summary: body, severity, title }),
+                });
+                const data = await r.json();
+                if (data.error) {
+                    btn.disabled = false;
+                    btn.textContent = 'Submit to GitHub';
+                    showError(data.error);
+                    return;
+                }
+                showSubmitted(data.issue_url);
+            } catch (err) {
+                btn.disabled = false;
+                btn.textContent = 'Submit to GitHub';
+                showError(err.message);
+            }
+        }
+
+        document.getElementById('userInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        setTitle();
+        startSession();
+    </script>
+</body>
+</html>

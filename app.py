@@ -12,6 +12,7 @@ from werkzeug.utils import secure_filename
 
 import config
 from pipeline import db
+from pipeline import feedback
 from pipeline.orchestrator import run_pipeline
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -217,6 +218,71 @@ def download_file(filename):
 def job_history():
     """Return list of completed/failed jobs, newest first."""
     return jsonify(db.list_jobs(limit=200))
+
+
+# ── Feedback routes ──────────────────────────────────────────────────
+
+@app.route("/history")
+def history_page():
+    return render_template("history.html")
+
+
+@app.route("/feedback/<job_id>")
+def feedback_page(job_id):
+    j = db.get_job(job_id)
+    if not j:
+        return "Job not found", 404
+    return render_template("feedback.html", job_id=job_id, job=j)
+
+
+@app.route("/api/feedback/<job_id>/start", methods=["POST"])
+def feedback_start(job_id):
+    j = db.get_job(job_id)
+    if not j:
+        return jsonify({"error": "Job not found"}), 404
+    if j.get("status") != "complete":
+        return jsonify({"error": "Feedback is only available for completed jobs"}), 400
+    try:
+        return jsonify(feedback.start_interview(job_id))
+    except Exception as e:
+        logger.exception("Feedback start failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/feedback/<session_id>/message", methods=["POST"])
+def feedback_message(session_id):
+    data = request.get_json() or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Empty message"}), 400
+    try:
+        return jsonify(feedback.send_user_message(session_id, text))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.exception("Feedback message failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/feedback/<session_id>/submit", methods=["POST"])
+def feedback_submit(session_id):
+    data = request.get_json() or {}
+    summary = data.get("summary")
+    severity = data.get("severity")
+    title = data.get("title")
+    try:
+        issue_url = feedback.submit_to_github(
+            session_id,
+            summary_override=summary,
+            severity_override=severity,
+            title_override=title,
+        )
+        return jsonify({"issue_url": issue_url})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.exception("Feedback submit failed")
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Main ─────────────────────────────────────────────────────────────
