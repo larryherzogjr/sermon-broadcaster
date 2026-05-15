@@ -56,6 +56,9 @@ MAX_SLOWDOWN = 0.93  # Don't slow down more than 7%
 # Paths
 WORK_DIR = os.path.join(os.path.dirname(__file__), "work")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
+STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
+DB_PATH = os.path.join(STATE_DIR, "jobs.db")
 
 os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(STATE_DIR, exist_ok=True)

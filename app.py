@@ -11,6 +11,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 
 import config
+from pipeline import db
 from pipeline.orchestrator import run_pipeline
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -28,6 +29,11 @@ app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024 * 1024  # 5 GB upload limit
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Persistence: schema + reconcile orphaned jobs from a prior crash/restart.
+# Runs at import time so it executes under systemd too.
+db.init_schema()
+db.mark_orphans_failed()
+
 ALLOWED_EXTENSIONS = {"mp4", "mkv", "avi", "mov", "webm", "mp3", "wav", "m4a", "flac", "ogg"}
 
 
@@ -35,12 +41,12 @@ def _allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# ── Job State ────────────────────────────────────────────────────────
-jobs = {}
-
+# ── Job Handle ───────────────────────────────────────────────────────
 
 class Job:
-    def __init__(self, job_id, target_duration,
+    """Thin handle over a persisted job row. State lives in SQLite."""
+
+    def __init__(self, job_id, target_duration, source, source_type,
                  include_bumpers_dynamic=False, include_bumpers_stock=False,
                  sermon_only=False,
                  youtube_url=None, local_file=None):
@@ -51,48 +57,32 @@ class Job:
         self.include_bumpers_dynamic = include_bumpers_dynamic
         self.include_bumpers_stock = include_bumpers_stock
         self.sermon_only = sermon_only
-        self.status = "queued"
-        self.messages = []
-        self.result = None
-        self.error = None
+
+        db.create_job(
+            job_id=job_id,
+            source=source,
+            source_type=source_type,
+            target_duration=target_duration,
+            include_dynamic=include_bumpers_dynamic,
+            include_stock=include_bumpers_stock,
+            sermon_only=sermon_only,
+        )
 
     def update_status(self, message):
-        self.status = "running"
-        self.messages.append({
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "text": message,
-        })
+        ts = datetime.now().strftime("%H:%M:%S")
+        db.append_message(self.job_id, ts, message)
         logger.info(f"[Job {self.job_id}] {message}")
 
-    def to_dict(self):
-        d = {
-            "job_id": self.job_id,
-            "source": self.youtube_url or (os.path.basename(self.local_file) if self.local_file else ""),
-            "target_duration": self.target_duration,
-            "status": self.status,
-            "messages": self.messages,
-        }
-        if self.result:
-            d["result"] = {
-                "output_filename": self.result.get("output_filename"),
-                "outputs": self.result.get("outputs", []),
-                "boundaries": self.result.get("boundaries"),
-                "processing": self.result.get("processing"),
-                "timing": self.result.get("timing"),
-                "transcript_summary": self.result.get("transcript"),
-                "broadcast_duration": self.result.get("broadcast_duration"),
-                "include_bumpers": self.result.get("include_bumpers"),
-                "teaser": self.result.get("teaser"),
-            }
-        if self.error:
-            d["error"] = str(self.error)
-        return d
+    def set_result(self, outputs, metadata):
+        db.set_result(self.job_id, outputs, metadata)
+
+    def set_error(self, error_str):
+        db.set_error(self.job_id, error_str)
 
 
 def _run_job(job: Job):
     """Run the pipeline in a background thread."""
     try:
-        job.status = "running"
         result = run_pipeline(
             youtube_url=job.youtube_url,
             local_file=job.local_file,
@@ -102,11 +92,18 @@ def _run_job(job: Job):
             sermon_only=job.sermon_only,
             status_callback=job.update_status,
         )
-        job.result = result
-        job.status = "complete"
+        metadata = {
+            "boundaries": result.get("boundaries"),
+            "processing": result.get("processing"),
+            "timing": result.get("timing"),
+            "teaser": result.get("teaser"),
+            "transcript_summary": result.get("transcript"),
+            "broadcast_duration": result.get("broadcast_duration"),
+            "include_bumpers": result.get("include_bumpers"),
+        }
+        job.set_result(result.get("outputs", []), metadata)
     except Exception as e:
-        job.error = str(e)
-        job.status = "failed"
+        job.set_error(str(e))
         logger.exception(f"Job {job.job_id} failed")
 
 
@@ -144,11 +141,12 @@ def start_processing():
             logger.info(f"File uploaded: {filepath} ({os.path.getsize(filepath) / 1024 / 1024:.1f} MB)")
 
             job = Job(job_id, target_duration,
+                      source=os.path.basename(filepath),
+                      source_type="upload",
                       include_bumpers_dynamic=include_dynamic,
                       include_bumpers_stock=include_stock,
                       sermon_only=sermon_only,
                       local_file=filepath)
-            jobs[job_id] = job
 
             thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
             thread.start()
@@ -184,11 +182,12 @@ def start_processing():
 
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     job = Job(job_id, target_duration,
+              source=youtube_url,
+              source_type="youtube",
               include_bumpers_dynamic=include_dynamic,
               include_bumpers_stock=include_stock,
               sermon_only=sermon_only,
               youtube_url=youtube_url)
-    jobs[job_id] = job
 
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     thread.start()
@@ -198,10 +197,10 @@ def start_processing():
 
 @app.route("/api/status/<job_id>")
 def job_status(job_id):
-    job = jobs.get(job_id)
-    if not job:
+    j = db.get_job(job_id)
+    if not j:
         return jsonify({"error": "Job not found"}), 404
-    return jsonify(job.to_dict())
+    return jsonify(j)
 
 
 @app.route("/api/download/<filename>")
@@ -216,13 +215,8 @@ def download_file(filename):
 
 @app.route("/api/history")
 def job_history():
-    """Return list of completed jobs."""
-    completed = [
-        j.to_dict() for j in jobs.values()
-        if j.status in ("complete", "failed")
-    ]
-    completed.sort(key=lambda j: j["job_id"], reverse=True)
-    return jsonify(completed)
+    """Return list of completed/failed jobs, newest first."""
+    return jsonify(db.list_jobs(limit=200))
 
 
 # ── Main ─────────────────────────────────────────────────────────────
