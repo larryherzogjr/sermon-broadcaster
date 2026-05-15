@@ -59,6 +59,13 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DB_PATH = os.path.join(STATE_DIR, "jobs.db")
 
+# Feedback / GitHub issue submission
+GITHUB_REPO = os.getenv("GITHUB_REPO", "larryherzogjr/sermon-broadcaster")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+FEEDBACK_SOFT_CAP = 5
+FEEDBACK_HARD_CAP = 8
+CLAUDE_MODEL_FEEDBACK = os.getenv("CLAUDE_MODEL_FEEDBACK", "claude-opus-4-7")
+
 os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(STATE_DIR, exist_ok=True)
