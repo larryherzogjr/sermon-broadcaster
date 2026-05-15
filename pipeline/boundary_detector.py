@@ -330,8 +330,12 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
     # --- Find all prayer transitions ---
     prayer_phrases = [
         "let's pray", "let us pray", "shall we pray",
-        "would you pray", "bow our heads", "bow your heads",
+        "would you pray", "will you pray",
+        "would you bow", "will you bow", "please bow",
+        "bow our heads", "bow your heads", "bow with me",
         "let's bow", "let us bow",
+        "would you join me", "will you join me", "join me in prayer",
+        "pray with me",
     ]
     
     prayer_transitions = []
