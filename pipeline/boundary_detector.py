@@ -10,153 +10,199 @@ import config
 
 logger = logging.getLogger(__name__)
 
-BOUNDARY_PROMPT = """You are an expert at analyzing church service transcripts to identify the exact boundaries of the sermon portion for radio broadcast.
+BOUNDARY_PROMPT = """You are an expert at analyzing church service transcripts to identify the structural boundaries of the sermon portion for radio broadcast.
 
-You will receive a timestamped transcript of a full church service. Your job is to identify:
+The broadcast prioritizes content in this order (most important first):
+  1. Scripture reading (always included)
+  2. Sermon body (always included)
+  3. Opening prayer (included when target duration allows)
+  4. Closing prayer (included when target duration allows)
 
-1. The SERMON START — the moment the SCRIPTURE READING for the sermon begins.
-   The broadcast includes the scripture reading AND the sermon body that follows.
+You will identify boundary timestamps for each component. The broadcast system will then choose which optional components to include based on the target duration.
 
-   WHAT COUNTS AS THE SERMON SCRIPTURE READING:
-   The "sermon scripture reading" is a FORMAL READING from the Bible done
-   BEFORE the sermon begins. It is typically:
-   - Read in a stately, deliberate manner (often verse-by-verse cadence)
-   - Announced beforehand (e.g., "Our text today is from Acts chapter 17,
-     verses 22 through 31" or "Please turn with me to...")
-   - Followed by sustained preaching ON that same passage
-   - Usually preceded by a "please stand" cue and followed by a "be seated" cue
+---
 
-   WHAT IS NOT THE SERMON SCRIPTURE READING:
-   - The pastor PARAPHRASING or RECAPPING scripture within the sermon body
-     (e.g., "So Paul shares with them the God who made the world..." is the
-     pastor's own narration, NOT a scripture reading)
-   - The pastor QUOTING a verse mid-sermon for illustration
-   - The pastor REFERENCING a passage during preaching
-   - Earlier liturgical readings (Psalm, Epistle, OT reading) that are part
-     of worship but are NOT what the sermon is preached from
+REQUIRED TIMESTAMPS:
 
-   IMPORTANT — DISTINGUISHING THE SERMON SCRIPTURE FROM EARLIER READINGS:
-   Many services have multiple scripture readings (e.g., Old Testament, Psalm,
-   Epistle, Gospel) earlier in the service. The pastor may also ask the
-   congregation to stand for those readings. Those are NOT the sermon scripture.
+1. SERMON BODY START — sermon_body_start
+   The moment the pastor begins preaching the sermon proper (not the scripture reading, not a prayer).
+   This is typically right after a "you may be seated" cue following the scripture reading,
+   or after special music between the readings and the sermon. It is the first words of the
+   pastor's exposition/teaching content.
 
-   The SERMON scripture reading is the LAST formal Bible reading BEFORE the
-   sermon proper. You can identify it by these signs:
-   - It is followed (often after a "you may be seated" cue) by sustained
-     expository or topical preaching on that same passage
-   - The pastor frequently references the passage during the sermon
-   - It typically comes AFTER any earlier liturgical readings, hymns, offering,
-     pastoral prayer, etc.
-   - The text being read sounds like Bible verses (formal, scriptural language),
-     not the pastor's own conversational explanation
+2. SCRIPTURE READING — scripture_start and scripture_end (or both null if no formal reading)
+   The formal Bible reading(s) that the sermon is based on. Identifiable by:
+   - Stately, verse-by-verse cadence (read deliberately)
+   - Announced beforehand ("Our text today is from Acts chapter 2..." or
+     "Please stand for the reading of God's Word")
+   - Typically follows a "please stand" / "let us stand" cue (set scripture_start to AFTER
+     the stand cue, at the first word of the actual reading)
+   - Concludes with a closing phrase like "Here ends our reading", "This is the Word of the
+     Lord", or "Thanks be to God" (set scripture_end to the end of the LAST formal reading,
+     BEFORE any congregational response)
 
-   If unsure between two candidate readings, pick the one whose content the
-   pastor preaches on in the sermon body. Look at what the sermon is ABOUT and
-   match it to the FORMAL reading (not to mid-sermon paraphrases).
+   Multiple consecutive readings: If the service has multiple formal readings back-to-back
+   (e.g., OT reading + NT reading), include ALL of them. Set scripture_start to the start
+   of the FIRST reading and scripture_end to the end of the LAST reading.
 
-   Just before the sermon scripture reading, the pastor typically asks the
-   congregation to stand:
-     - "Please stand for the reading of God's Word"
-     - "Let us stand for the reading of God's Word"
-     - "Please rise"
-   The sermon_start should be set to the START of the SERMON scripture reading
-   itself, AFTER the "please stand" / "let us stand" cue ends.
-
-   IMPORTANT: Use the timestamp of the BEGINNING of the formal sermon scripture
-   reading. If no formal scripture reading occurs (pastor jumps straight into
-   preaching), use the START of the sermon proper.
-
-   This is NOT:
-   - Welcome/announcements
-   - Earlier scripture readings (OT, Psalm, Epistle, etc.) that are part of the
-     liturgy but not what the sermon is preached from
-   - Opening prayer (before any scripture)
-   - Hymns or worship
-   - Offering
-   - The "please stand" cue itself (we want to skip past this)
+   What scripture_start/scripture_end IS NOT:
    - Mid-sermon paraphrases or quotes of scripture by the pastor
+   - Earlier liturgical readings (Psalm in the call to worship, etc.) that are part of
+     worship liturgy but not the sermon text
+   - Recap of scripture inside the sermon body
 
-2. SEATING CUE — between the SERMON scripture reading and the sermon body, the
-   pastor typically tells the congregation to sit:
-     - "You may be seated"
-     - "Please be seated"
-     - "You may sit down"
-     - "Be seated, please"
-   Identify this cue's timestamps so the system can splice it out.
+   Match to sermon: If the sermon is preached on a DIFFERENT passage than the formal
+   readings (e.g., sermon on John 7 but formal readings were Numbers 11 + Acts 2), STILL
+   use the formal readings as scripture_start/scripture_end. Lutheran services often have
+   readings that thematically support the sermon without being the exact passage preached.
 
-   IMPORTANT: This must be the seating cue that occurs AFTER the SERMON
-   scripture reading (not after earlier liturgical readings). The seating cue
-   timestamp MUST fall between sermon_start and the start of the sermon body.
-   If the pastor tells people to sit after earlier readings (Psalm, Epistle, etc.),
-   ignore those — only the cue immediately before the sermon body matters.
+   If no formal sermon scripture reading occurs (pastor jumps straight into preaching with
+   only inline paraphrasing), set both scripture_start and scripture_end to null.
 
-   - seating_cue_start: timestamp of the BEGINNING of the seating cue phrase
-   - seating_cue_end: timestamp of the END of the seating cue phrase (so audio
-     resumes cleanly with the sermon body)
+3. OPENING PRAYER — opening_prayer_start and opening_prayer_end (or both null if none)
+   A SHORT prayer offered by the pastor AFTER the scripture reading (if any) and
+   IMMEDIATELY before the sermon body begins. Often called a "prayer of illumination" or
+   simply opening prayer.
 
-   If no clear seating cue is present (e.g., the pastor flows directly from
-   scripture into preaching), set both to null.
+   SERVICE ORDER: scripture reading → [optional creed/music/seating cue] →
+   opening prayer → sermon body. The opening prayer is always between scripture_end
+   and sermon_body_start.
 
-3. TWO SERMON END POINTS — you must provide both:
+   Identifiable by:
+   - Phrases like "Let us pray", "Bow with me in prayer", "Heavenly Father, open our hearts..."
+   - Brief duration (15-60 seconds typically)
+   - Located AFTER scripture_end (when scripture is present), immediately before
+     sermon_body_start
+   - If there is no scripture reading, it appears immediately before sermon_body_start
 
-   a) sermon_end_with_prayer — the end of the closing prayer's "Amen."
-      - This is the prayer the pastor prays to conclude the sermon.
-      - The timestamp should be the END of the segment containing the final "Amen" of this prayer.
-      - EXCLUDE anything after: announcements, closing hymns, benediction.
+   What opening_prayer IS NOT:
+   - The invocation/prayer at the START of the service (way back at the call to worship)
+   - The prayer of confession (corporate, liturgical)
+   - The pastoral prayer (typically longer, intercessory)
+   - The Lord's Prayer (corporate)
+   - Prayer for graduates / special people (situational, not sermon-related)
 
-   b) sermon_end_without_prayer — the end of the last substantive sermon sentence BEFORE the prayer transition.
-      - This is the final teaching point, application, or concluding thought.
-      - EXCLUDE "Let us pray" / "Let's pray" / "Shall we pray" / any prayer language.
-      - Example: "...and that is the hope we have in Christ. Let's pray." — this timestamp is the END of the segment containing "Christ."
+   Only mark as opening_prayer if you're confident it's the pastor's sermon-opening prayer.
+   When in doubt, set to null. Including a non-sermon prayer hurts the broadcast.
 
-   The broadcast system will choose which ending to use based on time constraints.
+4. SEATING CUE — seating_cue_start and seating_cue_end (existing behavior, unchanged)
+   "You may be seated" / "Please be seated" between scripture reading and sermon body.
+   The cue that occurs AFTER the sermon scripture (not after earlier liturgical content).
 
-Respond ONLY with a JSON object in this exact format (no markdown, no extra text):
+5. SERMON END WITH PRAYER — sermon_end_with_prayer
+   End of the pastor's closing prayer "Amen" — exclude anything after (announcements,
+   closing hymn, benediction).
+
+6. SERMON END WITHOUT PRAYER — sermon_end_without_prayer
+   End of the last substantive sermon sentence BEFORE the prayer transition (before
+   "Let's pray" / "Let us pray" / etc.).
+
+---
+
+RESPONSE FORMAT — respond ONLY with a JSON object, no markdown, no preamble:
+
 {
-    "sermon_start": 123.45,
-    "seating_cue_start": 145.20,
-    "seating_cue_end": 147.80,
-    "sermon_end_with_prayer": 2400.00,
-    "sermon_end_without_prayer": 2345.67,
+    "sermon_body_start": 2229.7,
+    "scripture_start": 1750.0,
+    "scripture_end": 1920.0,
+    "opening_prayer_start": null,
+    "opening_prayer_end": null,
+    "seating_cue_start": 2218.0,
+    "seating_cue_end": 2220.0,
+    "sermon_end_with_prayer": 3436.0,
+    "sermon_end_without_prayer": 3367.4,
     "confidence": "high",
-    "start_reason": "Brief explanation — quote the first few words of scripture reading in single quotes",
-    "seating_cue_reason": "The exact phrase used (or null if no seating cue present)",
-    "end_with_prayer_reason": "Brief explanation — what the closing Amen is",
+    "sermon_body_reason": "First words of preaching — quote in single quotes",
+    "scripture_reason": "Brief identification of the scripture reading — quote first few words of the reading itself in single quotes",
+    "opening_prayer_reason": "Identification of the opening prayer if present, or 'no opening prayer detected'",
+    "seating_cue_reason": "The exact phrase used (or null)",
+    "end_with_prayer_reason": "What the closing Amen is",
     "end_without_prayer_reason": "The last substantive sentence before prayer transition",
-    "sermon_title_guess": "Your best guess at the sermon title/topic based on content"
+    "sermon_title_guess": "Best guess at sermon title/topic"
 }
 
-All times are in seconds (float). Confidence should be "high", "medium", or "low".
-If no seating cue is present, set seating_cue_start and seating_cue_end to null.
-If you cannot identify a sermon in the transcript, respond with:
-{
-    "error": "Explanation of why sermon boundaries could not be determined"
-}"""
+All times are in seconds (float). Use null (not 0.0) for missing optional timestamps.
+Confidence: "high", "medium", or "low".
+
+If you cannot identify a sermon at all, respond with:
+{"error": "Explanation"}"""
+
+
+def _refine_timestamp_by_quoted_phrase(timestamp: float, reason: str, words: list,
+                                        search_window: float = 120.0,
+                                        is_end: bool = False) -> tuple:
+    """
+    Try to refine a timestamp by finding a quoted phrase from `reason` in the word stream.
+
+    Args:
+        timestamp: Claude's reported timestamp (seconds)
+        reason: Claude's reason string, which may contain a quoted phrase in single or double quotes
+        words: Full word-level timestamp list
+        search_window: How far around Claude's timestamp to search (seconds, default ±120)
+        is_end: If True, snap to the END of the matched phrase; if False, snap to the START
+
+    Returns:
+        (refined_timestamp, matched_phrase) or (None, None) if no match
+    """
+    import re
+
+    quoted = re.findall(r"'([^']+)'", reason or "")
+    if not quoted:
+        quoted = re.findall(r'"([^"]+)"', reason or "")
+    if not quoted:
+        return None, None
+
+    phrase = quoted[0]
+    search_words = phrase.lower().split()[:6]
+    if len(search_words) < 2:
+        return None, None
+
+    search_begin = timestamp - search_window
+    search_end = timestamp + search_window
+
+    # Try progressively shorter matches: 5 words → 2 words
+    for match_len in range(min(5, len(search_words)), 1, -1):
+        target = [sw.strip(".,!?;:'\"") for sw in search_words[:match_len]]
+        for i, w in enumerate(words):
+            if w["start"] < search_begin or w["start"] > search_end:
+                continue
+            if i + match_len > len(words):
+                continue
+            candidate = [
+                words[i + j]["word"].lower().strip(".,!?;:'\"")
+                for j in range(match_len)
+            ]
+            if candidate == target:
+                if is_end:
+                    return words[i + match_len - 1]["end"] + 0.2, " ".join(candidate)
+                else:
+                    return max(0, words[i]["start"] - 0.3), " ".join(candidate)
+    return None, None
 
 
 def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> dict:
     """
     Refine Claude's boundaries using word-level timestamps.
-    
+
     Claude's timestamps can be off by a minute or more because it works from
     segment-level timestamps. We use word-level data to find exact cut points.
     """
-    sermon_start = boundaries["sermon_start"]
+    sermon_start = boundaries["sermon_body_start"]
     end_with = boundaries["sermon_end_with_prayer"]
     end_without = boundaries["sermon_end_without_prayer"]
-    
+
     logger.info(
-        f"[REFINE] Claude endpoints: start={sermon_start:.1f}, "
+        f"[REFINE] Claude endpoints: sermon_body_start={sermon_start:.1f}, "
         f"end_with={end_with:.1f}, end_without={end_without:.1f}"
     )
-    
-    # ── Refine START boundary ────────────────────────────────────────
+
+    # ── Refine SERMON BODY START boundary ────────────────────────────
     # Claude's start can land in a hymn or silence before the sermon.
-    # Strategy: extract the first words Claude quoted in start_reason,
+    # Strategy: extract the first words Claude quoted in sermon_body_reason,
     # find them in the word-level timestamps, and snap to just before them.
-    
+
     start_refined = False
-    start_reason = boundaries.get("start_reason", "")
+    start_reason = boundaries.get("sermon_body_reason") or boundaries.get("start_reason", "")
     
     # Extract quoted text from start_reason (text between single quotes)
     import re
@@ -198,8 +244,8 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
 
                 if candidate == target:
                     new_start = words[i]["start"] - 0.3
-                    old_start = boundaries["sermon_start"]
-                    boundaries["sermon_start"] = new_start
+                    old_start = boundaries["sermon_body_start"]
+                    boundaries["sermon_body_start"] = new_start
                     start_refined = True
                     logger.info(
                         f"[REFINE] Start matched ({match_len} words): "
@@ -257,8 +303,8 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
 
             if best_idx is not None:
                 new_start = words[best_idx]["start"] - 0.3
-                old_start = boundaries["sermon_start"]
-                boundaries["sermon_start"] = new_start
+                old_start = boundaries["sermon_body_start"]
+                boundaries["sermon_body_start"] = new_start
                 start_refined = True
                 logger.info(
                     f"[REFINE] Start gap (widest): {best_gap:.1f}s silence, "
@@ -284,7 +330,7 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
     
     # ── Refine END boundaries ────────────────────────────────────────
     # Search the last 40% of the sermon for all markers
-    sermon_start = boundaries["sermon_start"]  # use refined start
+    sermon_start = boundaries["sermon_body_start"]  # use refined start
     earliest_endpoint = min(end_with, end_without)
     search_from = sermon_start + (earliest_endpoint - sermon_start) * 0.6
     
@@ -495,19 +541,159 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
         f"end_without={boundaries['sermon_end_without_prayer']:.1f}"
     )
 
+    # ── Refine SCRIPTURE start/end ──────────────────────────────────
+    scripture_start = boundaries.get("scripture_start")
+    if scripture_start is not None:
+        refined, matched = _refine_timestamp_by_quoted_phrase(
+            scripture_start, boundaries.get("scripture_reason", ""),
+            words, search_window=180.0, is_end=False,
+        )
+        if refined is not None:
+            logger.info(
+                f"[REFINE] Scripture start: {scripture_start:.1f}s -> {refined:.1f}s "
+                f"(matched: '{matched}')"
+            )
+            boundaries["scripture_start"] = refined
+            if status_callback:
+                status_callback(f"Refined scripture start at {refined:.0f}s")
+        else:
+            logger.warning(
+                "[REFINE] Could not refine scripture_start — keeping Claude's raw value "
+                f"({scripture_start:.1f}s)"
+            )
+
+    scripture_end = boundaries.get("scripture_end")
+    if scripture_end is not None:
+        # For scripture end, look for closing phrases like "Here ends" / "Thanks be to God"
+        # OR the quoted phrase from scripture_reason (if any was at the end).
+        # Simpler approach: search for any of the common closing phrases near Claude's timestamp.
+        closing_phrases = [
+            ["here", "ends", "our"],          # "Here ends our scripture reading"
+            ["here", "ends", "the"],          # "Here ends the lesson"
+            ["thanks", "be", "to", "god"],    # "Thanks be to God"
+            ["this", "is", "the", "word"],    # "This is the word of the Lord"
+            ["word", "of", "the", "lord"],
+        ]
+        found = False
+        for phrase in closing_phrases:
+            for i, w in enumerate(words):
+                if abs(w["start"] - scripture_end) > 120:
+                    continue
+                if i + len(phrase) > len(words):
+                    continue
+                candidate = [
+                    words[i + j]["word"].lower().strip(".,!?;:'\"")
+                    for j in range(len(phrase))
+                ]
+                if candidate == phrase:
+                    new_end = words[i + len(phrase) - 1]["end"] + 0.3
+                    logger.info(
+                        f"[REFINE] Scripture end: {scripture_end:.1f}s -> {new_end:.1f}s "
+                        f"(matched closing phrase: '{' '.join(phrase)}')"
+                    )
+                    boundaries["scripture_end"] = new_end
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            logger.info(
+                f"[REFINE] No scripture closing phrase found — keeping Claude's "
+                f"scripture_end={scripture_end:.1f}s"
+            )
+
+    # ── Refine OPENING PRAYER start/end ─────────────────────────────
+    opening_prayer_start = boundaries.get("opening_prayer_start")
+    if opening_prayer_start is not None:
+        refined, matched = _refine_timestamp_by_quoted_phrase(
+            opening_prayer_start, boundaries.get("opening_prayer_reason", ""),
+            words, search_window=120.0, is_end=False,
+        )
+        if refined is not None:
+            logger.info(
+                f"[REFINE] Opening prayer start: {opening_prayer_start:.1f}s -> {refined:.1f}s "
+                f"(matched: '{matched}')"
+            )
+            boundaries["opening_prayer_start"] = refined
+
+    opening_prayer_end = boundaries.get("opening_prayer_end")
+    if opening_prayer_end is not None:
+        # Opening prayer typically ends with "Amen" or "in Jesus' name, Amen"
+        # Look for the closest "Amen" near Claude's timestamp
+        closest_amen = None
+        for w in words:
+            if abs(w["end"] - opening_prayer_end) > 60:
+                continue
+            if w["word"].lower().strip(".,!?;:'\"") == "amen":
+                if closest_amen is None or abs(w["end"] - opening_prayer_end) < abs(closest_amen["end"] - opening_prayer_end):
+                    closest_amen = w
+        if closest_amen:
+            new_end = closest_amen["end"] + 0.5
+            logger.info(
+                f"[REFINE] Opening prayer end: {opening_prayer_end:.1f}s -> {new_end:.1f}s "
+                f"(matched 'Amen')"
+            )
+            boundaries["opening_prayer_end"] = new_end
+
+    # ── Validate: prayer/scripture must be in order ─────────────────
+    # If scripture_end < scripture_start (Claude messed up), null out both.
+    if (boundaries.get("scripture_start") is not None
+            and boundaries.get("scripture_end") is not None
+            and boundaries["scripture_end"] <= boundaries["scripture_start"]):
+        logger.warning("[REFINE] scripture_end ≤ scripture_start; nulling both")
+        boundaries["scripture_start"] = None
+        boundaries["scripture_end"] = None
+
+    # Opening prayer must come AFTER scripture (if any) and BEFORE sermon_body_start
+    op_start = boundaries.get("opening_prayer_start")
+    op_end = boundaries.get("opening_prayer_end")
+    scripture_end_val = boundaries.get("scripture_end")
+    body_start_val = boundaries.get("sermon_body_start")
+    if op_start is not None and op_end is not None:
+        # Must be before sermon body
+        if body_start_val is not None and op_start >= body_start_val:
+            logger.warning(
+                f"[REFINE] opening_prayer_start ({op_start:.1f}s) is at or after "
+                f"sermon_body_start ({body_start_val:.1f}s); nulling opening prayer"
+            )
+            boundaries["opening_prayer_start"] = None
+            boundaries["opening_prayer_end"] = None
+        # Must be after scripture end (if scripture exists), with small tolerance
+        elif scripture_end_val is not None and op_start < scripture_end_val - 5:
+            logger.warning(
+                f"[REFINE] opening_prayer_start ({op_start:.1f}s) is before "
+                f"scripture_end ({scripture_end_val:.1f}s); nulling opening prayer "
+                f"(likely an earlier liturgical prayer, not the sermon-opening prayer)"
+            )
+            boundaries["opening_prayer_start"] = None
+            boundaries["opening_prayer_end"] = None
+
     # ── Refine SEATING CUE if present ────────────────────────────────
     seating_start = boundaries.get("seating_cue_start")
     seating_end = boundaries.get("seating_cue_end")
+
+    # Determine earliest content boundary so we can sanity-check that the
+    # seating cue falls inside the broadcasted range. The cue sits in service
+    # order between scripture_end and sermon_body_start, so the earliest
+    # legitimate position is the start of whatever content we may include.
+    earliest_content = min(
+        v for v in (
+            boundaries.get("scripture_start"),
+            boundaries.get("opening_prayer_start"),
+            boundaries.get("sermon_body_start"),
+        )
+        if v is not None
+    )
 
     # Reject seating cues that fall OUTSIDE the sermon range. Sometimes
     # Claude returns a "you may be seated" from an earlier liturgical
     # reading (Psalm, Epistle, etc.) that's not the sermon scripture.
     if (seating_start is not None and seating_end is not None
-            and (seating_start < boundaries["sermon_start"]
+            and (seating_start < earliest_content
                  or seating_end > boundaries["sermon_end_with_prayer"])):
         logger.warning(
             f"[REFINE] Seating cue at {seating_start:.1f}s falls outside "
-            f"sermon range ({boundaries['sermon_start']:.1f}s - "
+            f"sermon range ({earliest_content:.1f}s - "
             f"{boundaries['sermon_end_with_prayer']:.1f}s). "
             f"Likely from an earlier liturgical reading. Ignoring."
         )
@@ -537,10 +723,10 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
         # Search window: tight window around Claude's reported timestamp.
         # Claude's segment-level timestamps can be off by 30-90 seconds, so we
         # search ±2 minutes around its reported position to find the actual
-        # phrase. We DO NOT start from sermon_start because there may be
-        # earlier "be seated" cues during liturgical readings.
+        # phrase. We DO NOT start from the earliest content because there may
+        # be earlier "be seated" cues during liturgical readings.
         search_center = (seating_start + seating_end) / 2.0
-        search_start = max(boundaries["sermon_start"], search_center - 120)
+        search_start = max(earliest_content, search_center - 120)
         search_end = min(boundaries["sermon_end_with_prayer"], search_center + 120)
 
         normalized_words = []
@@ -704,14 +890,28 @@ def detect_boundaries(transcript_data: dict, status_callback=None) -> dict:
         if words:
             result = _refine_boundaries(result, words, status_callback)
 
+        # Backward-compat: legacy code reads `sermon_start`. Default to sermon_body_start.
+        # The orchestrator may override this when it selects a content combination.
+        if "sermon_start" not in result:
+            result["sermon_start"] = result["sermon_body_start"]
+
         # Log both options
-        dur_with = result["sermon_end_with_prayer"] - result["sermon_start"]
-        dur_without = result["sermon_end_without_prayer"] - result["sermon_start"]
+        dur_with = result["sermon_end_with_prayer"] - result["sermon_body_start"]
+        dur_without = result["sermon_end_without_prayer"] - result["sermon_body_start"]
         logger.info(
-            f"Sermon boundaries: start={result['sermon_start']:.1f}s, "
+            f"Sermon boundaries: sermon_body_start={result['sermon_body_start']:.1f}s, "
             f"end_with_prayer={result['sermon_end_with_prayer']:.1f}s ({dur_with / 60:.1f} min), "
             f"end_without_prayer={result['sermon_end_without_prayer']:.1f}s ({dur_without / 60:.1f} min), "
             f"confidence: {result['confidence']}"
+        )
+
+        logger.info(
+            f"Structural map: "
+            f"opening_prayer={'%.1fs' % result['opening_prayer_start'] if result.get('opening_prayer_start') else 'none'}, "
+            f"scripture={'%.1fs-%.1fs' % (result['scripture_start'], result['scripture_end']) if result.get('scripture_start') else 'none'}, "
+            f"sermon_body={result['sermon_body_start']:.1f}s, "
+            f"end_with_prayer={result['sermon_end_with_prayer']:.1f}s, "
+            f"end_without_prayer={result['sermon_end_without_prayer']:.1f}s"
         )
 
         if status_callback:
