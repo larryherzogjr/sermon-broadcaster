@@ -69,19 +69,18 @@ def _select_content_combination(boundaries: dict, sermon_target: float,
       Add closing prayer if it fits within tempo limits (cut SECOND if more trimming needed)
 
     Service order (when all components present):
-      scripture reading → [creed/music/seating cue gap] → opening prayer →
-      [small gap] → sermon body → ... → closing prayer
+      scripture reading → ["please stand" cue + opening prayer + "be seated" cue] →
+      sermon body → ... → closing prayer
 
-    The opening prayer ALWAYS sits between scripture_end and sermon_body_start.
-    To "cut the opening prayer," splice the entire [scripture_end → sermon_body_start]
-    range — that subsumes the prayer along with any creed/music/seating cue.
+    No internal splicing — the broadcast is a single continuous extract from the
+    chosen start to the chosen end. Transition cues ("please stand", "you may be
+    seated") stay in the audio as natural service transitions.
 
     Returns a dict with:
       - start: selected start timestamp (seconds)
       - end: selected end timestamp (seconds)
-      - splices: list of (start, end) tuples to remove from the extracted segment
       - label: human-readable description of the selection
-      - duration: total duration of selected segment AFTER splices
+      - duration: end - start
     """
     sermon_body_start = boundaries.get("sermon_body_start") or boundaries["sermon_start"]
     scripture_start = boundaries.get("scripture_start")
@@ -95,83 +94,43 @@ def _select_content_combination(boundaries: dict, sermon_target: float,
     has_opening_prayer = (opening_prayer_start is not None
                          and opening_prayer_end is not None)
 
-    def gap(a, b, end_pre_roll=0.3):
-        """Return (a, b - end_pre_roll) tuple if it's a valid splice, else None.
-
-        The end_pre_roll keeps a small buffer of natural audio before the next
-        spoken word, so the splice doesn't cut directly on Whisper's detection
-        point (which is typically a few hundred ms after the actual audio onset).
-        Result: a natural breath of air before the sermon resumes, instead of
-        a hard cut into the first word.
-        """
-        if a is None or b is None:
-            return None
-        cut_end = b - end_pre_roll
-        if a >= cut_end - 0.5:  # require at least 500ms of splice to be worth it
-            return None
-        return (a, cut_end)
-
     # Build candidate options, most → least inclusive
     options = []
 
-    # ─ Option A: scripture + opening prayer + body + closing prayer ─
-    # Splice the [scripture_end → opening_prayer_start] gap (creed, music, seating).
-    # Splice the [opening_prayer_end → sermon_body_start] gap (usually small or zero).
+    # ─ Option A: scripture (if any) + opening prayer + body + closing prayer ─
     if has_opening_prayer:
         start = scripture_start if has_scripture else opening_prayer_start
-        splices = []
-        if has_scripture:
-            s1 = gap(scripture_end, opening_prayer_start)
-            if s1:
-                splices.append(s1)
-        s2 = gap(opening_prayer_end, sermon_body_start)
-        if s2:
-            splices.append(s2)
-        gross = end_with - start
-        spliced_out = sum(b - a for a, b in splices)
         options.append({
             "start": start,
             "end": end_with,
-            "splices": splices,
             "label": ("scripture + opening prayer + sermon + closing prayer"
                       if has_scripture
                       else "opening prayer + sermon + closing prayer"),
             "rank": 4 if has_scripture else 2,
-            "duration": gross - spliced_out,
+            "duration": end_with - start,
         })
 
-    # ─ Option B: scripture (or body) + body + closing prayer (cut opening prayer) ─
-    # Splice the entire [scripture_end → sermon_body_start] gap, which subsumes
-    # the opening prayer if any, plus creed/music/seating.
+    # ─ Option B: scripture (or body) + body + closing prayer ─
+    # If scripture exists, the start is at scripture_start; the broadcast then
+    # plays continuously through scripture → (stand cue) → opening prayer →
+    # (sit cue) → body. To "exclude" the opening prayer, start at body instead.
     base_start = scripture_start if has_scripture else sermon_body_start
-    splices_b = []
-    if has_scripture:
-        s = gap(scripture_end, sermon_body_start)
-        if s:
-            splices_b.append(s)
-    gross_b = end_with - base_start
-    spliced_out_b = sum(b - a for a, b in splices_b)
     options.append({
         "start": base_start,
         "end": end_with,
-        "splices": splices_b,
         "label": ("scripture + sermon + closing prayer" if has_scripture
                   else "sermon + closing prayer"),
         "rank": 3 if has_scripture else 1,
-        "duration": gross_b - spliced_out_b,
+        "duration": end_with - base_start,
     })
 
-    # ─ Option C: scripture (or body) + body only (cut both prayers) ─
-    splices_c = list(splices_b)  # same splice geometry as B
-    gross_c = end_without - base_start
-    spliced_out_c = sum(b - a for a, b in splices_c)
+    # ─ Option C: scripture (or body) + body only (no closing prayer) ─
     options.append({
         "start": base_start,
         "end": end_without,
-        "splices": splices_c,
         "label": ("scripture + sermon" if has_scripture else "sermon only"),
         "rank": 2 if has_scripture else 0,
-        "duration": gross_c - spliced_out_c,
+        "duration": end_without - base_start,
     })
 
     # Fit threshold: we can speed up by MAX_SPEEDUP and trim ~60s of natural silence
@@ -426,13 +385,9 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
             )
             boundaries["sermon_start"] = selection["start"]
             boundaries["sermon_end"] = selection["end"]
-            boundaries["interior_splices"] = selection["splices"]
             boundaries["selection_label"] = selection["label"]
         elif "sermon_end" not in boundaries:
             raise RuntimeError("Boundary detection returned no end point")
-        else:
-            # sermon_only branch or override branch — no splices
-            boundaries.setdefault("interior_splices", [])
 
         result["boundaries"] = boundaries
         result["timing"]["boundaries"] = time.time() - t0
@@ -468,67 +423,6 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
         _check_audio(sermon_audio_path, "after_extract", status_callback)
 
         result["timing"]["extract"] = time.time() - t0
-
-        # Stage 4.5: Splice out interior gaps from the extracted sermon segment.
-        # These are computed by _select_content_combination based on the chosen
-        # content combination. Each splice removes a contiguous range that contains
-        # non-sermon content (e.g., creed, special music, seating cue, post-cue pause).
-        interior_splices = boundaries.get("interior_splices") or []
-
-        if interior_splices:
-            from pipeline.audio_processor import remove_segment
-
-            # Splices are in ORIGINAL-AUDIO timeline. extract_segment added a 500ms
-            # pre-roll at the start, so map to the extracted-segment timeline:
-            #     extracted_time = original_time - (sermon_start - 0.5)
-            extract_pre_roll = 0.5
-            extract_origin = boundaries["sermon_start"] - extract_pre_roll
-
-            # Process splices in REVERSE chronological order so earlier splices'
-            # positions don't shift when later splices are applied.
-            splice_list = sorted(interior_splices, key=lambda s: s[0], reverse=True)
-
-            current_path = sermon_audio_path
-            total_removed = 0.0
-            for i, (orig_start, orig_end) in enumerate(splice_list):
-                # Clamp to be within the extracted segment range
-                if orig_end <= boundaries["sermon_start"] or orig_start >= boundaries["sermon_end"]:
-                    logger.info(
-                        f"Skipping out-of-range splice {orig_start:.1f}s-{orig_end:.1f}s "
-                        f"(outside extracted segment)"
-                    )
-                    continue
-
-                # Map to extracted timeline
-                seg_start = max(0, orig_start - extract_origin)
-                seg_end = orig_end - extract_origin
-
-                next_path = os.path.join(work_dir, f"sermon_spliced_{i}.wav")
-                try:
-                    remove_segment(current_path, seg_start, seg_end, next_path)
-                    removed_dur = orig_end - orig_start
-                    total_removed += removed_dur
-                    if status_callback:
-                        status_callback(
-                            f"Spliced out {removed_dur:.1f}s of non-sermon content "
-                            f"(orig {orig_start:.0f}s-{orig_end:.0f}s)"
-                        )
-                    logger.info(
-                        f"Splice applied: orig [{orig_start:.2f}s-{orig_end:.2f}s] "
-                        f"→ extracted [{seg_start:.2f}s-{seg_end:.2f}s] "
-                        f"({removed_dur:.2f}s removed)"
-                    )
-                    current_path = next_path
-                except Exception as e:
-                    logger.warning(f"Splice failed (non-fatal, continuing): {e}")
-
-            if total_removed > 0:
-                logger.info(
-                    f"Total non-sermon content removed via splicing: "
-                    f"{total_removed:.1f}s ({total_removed/60:.1f} min)"
-                )
-
-            sermon_audio_path = current_path
 
         # Stage 5: Fit sermon to target duration
         t0 = time.time()
