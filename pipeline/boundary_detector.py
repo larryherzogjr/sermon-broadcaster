@@ -771,6 +771,74 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
     return boundaries
 
 
+def _validate_boundary_response(candidate: dict) -> list:
+    """Run structural sanity checks on Claude's raw response.
+    Returns a list of issue strings; empty list means all checks pass.
+
+    These checks catch the two recurring Claude failure modes:
+      - "Latched onto mid-sermon phrase" → total duration unreasonably short
+      - "Pulled hymn into scripture" → sermon_body_start far from sermon_start
+      - "Missing verbatim quote" → word-level matching can't run, gap-fallback
+        often lands in bad places (e.g., between hymn verses)
+    """
+    import re
+    issues = []
+
+    sermon_start = candidate.get("sermon_start")
+    end_with = candidate.get("sermon_end_with_prayer")
+    sermon_body_start = candidate.get("sermon_body_start")
+    start_reason = candidate.get("start_reason") or ""
+
+    if sermon_start is None:
+        issues.append("sermon_start is null")
+    if end_with is None:
+        issues.append("sermon_end_with_prayer is null")
+
+    if issues:
+        return issues  # don't bother with downstream checks
+
+    # Check 1: total sermon span must be at least ~12 minutes.
+    # Real sermons at GFLC run 20-40 min; <12 means Claude latched onto
+    # a mid-sermon phrase as sermon_start, or onto a closing-prayer
+    # snippet as sermon_end.
+    duration = end_with - sermon_start
+    if duration < 720:
+        issues.append(
+            f"sermon span {duration:.0f}s < 12 min "
+            f"(start={sermon_start:.0f}s, end_with={end_with:.0f}s)"
+        )
+
+    # Check 2: if sermon_body_start is reported, it must be reasonably
+    # close to sermon_start. Scripture + opening prayer + transitions
+    # typically span 60-150 seconds; >240s means Claude has pulled in
+    # pre-sermon content (e.g., the hymn before the reading).
+    if sermon_body_start is not None:
+        body_gap = sermon_body_start - sermon_start
+        if body_gap > 240:
+            issues.append(
+                f"sermon_body_start - sermon_start = {body_gap:.0f}s > 4 min "
+                f"(pre-sermon content likely pulled in)"
+            )
+        elif body_gap < 0:
+            issues.append(
+                f"sermon_body_start ({sermon_body_start:.0f}s) is BEFORE "
+                f"sermon_start ({sermon_start:.0f}s)"
+            )
+
+    # Check 3: start_reason must contain a verbatim quoted phrase. Without
+    # one, word-level matching gets skipped and the gap-detection fallback
+    # often lands in the middle of a hymn or other pre-sermon audio.
+    has_single_quote = bool(re.search(r"'[^']{3,}'", start_reason))
+    has_double_quote = bool(re.search(r'"[^"]{3,}"', start_reason))
+    if not (has_single_quote or has_double_quote):
+        issues.append(
+            f"start_reason missing quoted phrase "
+            f"(got: {start_reason[:80]!r})"
+        )
+
+    return issues
+
+
 def detect_boundaries(transcript_data: dict, status_callback=None) -> dict:
     """
     Use Claude to analyze transcript and find sermon boundaries.
@@ -825,53 +893,154 @@ def detect_boundaries(transcript_data: dict, status_callback=None) -> dict:
 
     client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    try:
-        response = client.messages.create(
-            model=config.CLAUDE_MODEL_BOUNDARY,
-            max_tokens=1024,
-            system=BOUNDARY_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Here is the full timestamped transcript of a church service. "
-                        f"Total duration: {transcript_data['duration']:.1f} seconds "
-                        f"({transcript_data['duration'] / 60:.1f} minutes).\n\n"
-                        f"TRANSCRIPT:\n{formatted_transcript}"
-                    ),
-                }
-            ],
+    # ── Retry loop: ask Claude up to 3 times, accept first response that
+    # passes structural sanity checks. Claude is non-deterministic and
+    # occasionally produces wildly wrong boundaries (mid-sermon start,
+    # missing verbatim quote, hymn pulled into scripture). Retrying with
+    # specific feedback usually fixes it. Cost in the bad case: 2-3× the
+    # boundary API call (~$0.12-0.18 extra); good case is unchanged. ──
+    MAX_ATTEMPTS = 3
+    result = None
+    last_candidate = None
+    last_issues = []
+    response_text = ""
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        # On retries, prepend a hint explaining the previous failure so
+        # Claude can self-correct on the same prompt.
+        retry_preamble = ""
+        if attempt > 1 and last_issues:
+            retry_preamble = (
+                "NOTE: A previous attempt returned a structurally suspicious "
+                "response. Specific issues:\n"
+                + "\n".join(f"  - {issue}" for issue in last_issues)
+                + "\n\nPlease be especially careful to:\n"
+                "  - Identify the actual sermon scripture reading or sermon "
+                "proper as sermon_start (NOT a mid-sermon phrase, NOT the "
+                "preceding hymn)\n"
+                "  - Ensure sermon_body_start is reasonably close to "
+                "sermon_start (typically within ~2 minutes; 4 minutes max)\n"
+                "  - Include the first 5-8 words at sermon_start as a "
+                "VERBATIM quote in SINGLE QUOTES within start_reason\n\n"
+            )
+
+        try:
+            response = client.messages.create(
+                model=config.CLAUDE_MODEL_BOUNDARY,
+                max_tokens=1024,
+                system=BOUNDARY_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            retry_preamble
+                            + f"Here is the full timestamped transcript of a "
+                              f"church service. Total duration: "
+                              f"{transcript_data['duration']:.1f} seconds "
+                              f"({transcript_data['duration'] / 60:.1f} minutes).\n\n"
+                              f"TRANSCRIPT:\n{formatted_transcript}"
+                        ),
+                    }
+                ],
+            )
+
+            response_text = response.content[0].text.strip()
+            logger.info(
+                f"Raw Claude response attempt {attempt}/{MAX_ATTEMPTS} "
+                f"(first 500 chars): {response_text[:500]}"
+            )
+
+            # Strip any markdown fencing if present
+            if "```" in response_text:
+                parts = response_text.split("```")
+                if len(parts) >= 3:
+                    inner = parts[1]
+                    if inner.startswith("json"):
+                        inner = inner[4:]
+                    response_text = inner.strip()
+                else:
+                    response_text = parts[-1].strip()
+
+            # Try to find JSON object in the response if there's surrounding text
+            if not response_text.startswith("{"):
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                if start != -1 and end > start:
+                    response_text = response_text[start:end]
+
+            candidate = json.loads(response_text)
+
+            if "error" in candidate:
+                logger.warning(
+                    f"[BOUNDARY] Attempt {attempt}: Claude returned "
+                    f"error '{candidate['error']}'"
+                )
+                last_issues = [f"Claude returned error: {candidate['error']}"]
+                last_candidate = None
+                continue
+
+            # Run sanity checks
+            issues = _validate_boundary_response(candidate)
+
+            if not issues:
+                if attempt > 1:
+                    logger.info(
+                        f"[BOUNDARY] Attempt {attempt} passed sanity checks"
+                    )
+                    if status_callback:
+                        status_callback(
+                            f"Boundary detection succeeded on attempt {attempt}"
+                        )
+                result = candidate
+                break
+
+            # Sanity checks failed — log and try again
+            logger.warning(
+                f"[BOUNDARY] Attempt {attempt} failed sanity checks: "
+                + "; ".join(issues)
+            )
+            if status_callback and attempt < MAX_ATTEMPTS:
+                status_callback(
+                    f"Attempt {attempt}: boundary response failed sanity "
+                    f"checks, retrying..."
+                )
+            last_candidate = candidate
+            last_issues = issues
+
+        except json.JSONDecodeError:
+            logger.warning(
+                f"[BOUNDARY] Attempt {attempt} returned invalid JSON: "
+                f"{response_text[:200]}"
+            )
+            last_issues = ["Claude returned invalid JSON"]
+            last_candidate = None
+            if status_callback and attempt < MAX_ATTEMPTS:
+                status_callback(
+                    f"Attempt {attempt}: invalid JSON from Claude, retrying..."
+                )
+
+    # If all attempts failed sanity checks, fall back to the last candidate
+    # (better to proceed with imperfect boundaries than to fail the run).
+    if result is None:
+        if last_candidate is None:
+            raise RuntimeError(
+                f"Boundary detection failed after {MAX_ATTEMPTS} attempts. "
+                f"Last raw response: {response_text[:300]}"
+            )
+        logger.warning(
+            f"[BOUNDARY] All {MAX_ATTEMPTS} attempts failed sanity checks; "
+            f"proceeding with last response anyway. Final issues: "
+            + "; ".join(last_issues)
         )
+        if status_callback:
+            status_callback(
+                f"WARNING: All {MAX_ATTEMPTS} boundary attempts returned "
+                f"suspicious values; using last response — broadcast may "
+                f"need manual review"
+            )
+        result = last_candidate
 
-        response_text = response.content[0].text.strip()
-        logger.info(f"Raw Claude response (first 500 chars): {response_text[:500]}")
-
-        # Strip any markdown fencing if present
-        if "```" in response_text:
-            # Extract content between first ``` and last ```
-            parts = response_text.split("```")
-            # The JSON is typically in parts[1]
-            if len(parts) >= 3:
-                inner = parts[1]
-                # Remove optional language tag (e.g., "json\n")
-                if inner.startswith("json"):
-                    inner = inner[4:]
-                response_text = inner.strip()
-            else:
-                response_text = parts[-1].strip()
-
-        # Try to find JSON object in the response if there's surrounding text
-        if not response_text.startswith("{"):
-            start = response_text.find("{")
-            end = response_text.rfind("}") + 1
-            if start != -1 and end > start:
-                response_text = response_text[start:end]
-
-        result = json.loads(response_text)
-
-        if "error" in result:
-            raise RuntimeError(f"Boundary detection failed: {result['error']}")
-
+    try:
         # Refine boundaries using word-level timestamps
         words = transcript_data.get("words", [])
         if words:
@@ -921,11 +1090,6 @@ def detect_boundaries(transcript_data: dict, status_callback=None) -> dict:
 
         return result
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Claude response. Raw text:\n{response_text}")
-        raise RuntimeError(
-            f"Claude did not return valid JSON. Raw response: {response_text[:300]}"
-        )
     except Exception as e:
         logger.error(f"Boundary detection error: {e}")
         raise
