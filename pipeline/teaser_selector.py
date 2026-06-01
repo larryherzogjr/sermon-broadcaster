@@ -80,6 +80,20 @@ def _snap_to_word_boundaries(teaser: dict, words: list) -> dict:
     return teaser
 
 
+def _reconstruct_text_from_span(words: list, start_time: float, end_time: float,
+                                tol: float = 0.05) -> str:
+    """Rebuild teaser text from the words actually inside the clip span.
+
+    Guarantees the stored/displayed text matches the extracted audio, regardless
+    of which match path ran or whether the duration cap trimmed the end.
+    """
+    span = [
+        w["word"] for w in words
+        if w["start"] >= start_time - tol and w["end"] <= end_time + tol
+    ]
+    return " ".join(span).strip()
+
+
 def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
                   status_callback=None) -> dict:
     """
@@ -235,29 +249,59 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
 
     # At this point `result`, `start_time`, `end_time` are set from the accepted attempt
     try:
-
-        # Target: fit within the intro teaser window (typically 23s wide)
-        # Cap at 22s with a 1s safety margin
+        # Target: fit within the intro teaser window (typically 23s wide).
+        # Cap at 22s with a ~1s safety margin. The window is a HARD ceiling —
+        # the assembler fade-cuts anything longer — so when a selection overruns
+        # we TRIM it back to a complete thought; we never extend past the budget.
         MAX_DURATION = 22.0
         MIN_DURATION = 10.0
 
         if raw_duration > MAX_DURATION:
-            # Too long — trim at a natural word boundary
-            sermon_words = [w for w in words if start_time <= w["start"] <= end_time]
-            # Find the last word that fits within MAX_DURATION
-            target_end = start_time + MAX_DURATION
-            trimmed_end_word = None
-            for w in sermon_words:
-                if w["end"] <= target_end:
-                    trimmed_end_word = w
-                else:
-                    break
-            if trimmed_end_word:
-                end_time = trimmed_end_word["end"] + 0.2
-                logger.info(
-                    f"Teaser trimmed to word boundary: {start_time:.1f}s - {end_time:.1f}s "
-                    f"({end_time - start_time:.1f}s, ends at '{trimmed_end_word['word']}')"
+            clip_words = [w for w in words if start_time <= w["start"] <= end_time]
+            budget_end = start_time + MAX_DURATION
+
+            def _ends_sentence(word_str):
+                w = word_str.strip()
+                return w.endswith((".", "?", "!"))
+
+            sentence_ends = [
+                w for w in clip_words
+                if w["end"] <= budget_end and _ends_sentence(w["word"])
+            ]
+
+            if sentence_ends:
+                long_enough = [
+                    w for w in sentence_ends
+                    if (w["end"] - start_time) >= MIN_DURATION
+                ]
+                # Prefer the latest complete sentence that's also long enough;
+                # otherwise take the latest complete sentence (a slightly short
+                # but COMPLETE thought beats a 22s mid-sentence truncation).
+                chosen = long_enough[-1] if long_enough else sentence_ends[-1]
+                end_time = chosen["end"] + 0.2
+                log_at = logger.info if long_enough else logger.warning
+                log_at(
+                    f"Teaser trimmed to SENTENCE boundary: {start_time:.1f}s - "
+                    f"{end_time:.1f}s ({end_time - start_time:.1f}s, ends at "
+                    f"'{chosen['word']}')"
                 )
+            else:
+                # No complete sentence fits the budget (rare: first sentence is
+                # itself > 22s). Trim to the last word boundary; the text is
+                # re-derived below so audio and text still stay in sync.
+                trimmed_end_word = None
+                for w in clip_words:
+                    if w["end"] <= budget_end:
+                        trimmed_end_word = w
+                    else:
+                        break
+                if trimmed_end_word:
+                    end_time = trimmed_end_word["end"] + 0.2
+                    logger.warning(
+                        f"Teaser too long; no sentence boundary fits "
+                        f"{MAX_DURATION:.0f}s — trimmed to word boundary at "
+                        f"'{trimmed_end_word['word']}' ({end_time - start_time:.1f}s)"
+                    )
         elif raw_duration < MIN_DURATION:
             logger.warning(
                 f"Teaser is short ({raw_duration:.1f}s, target 13s) — "
@@ -267,15 +311,32 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
         result["teaser_start"] = start_time
         result["teaser_end"] = end_time
 
+        # CRITICAL: re-derive teaser_text from the words actually inside the
+        # final clip span. The duration trim (and prefix/window matching) can
+        # move end_time without touching Claude's original text — that mismatch
+        # is what stranded the listener mid-sentence. Re-deriving guarantees the
+        # stored/displayed text equals the extracted audio.
+        original_text = teaser_text
+        reconstructed = _reconstruct_text_from_span(words, start_time, end_time)
+        if reconstructed:
+            result["teaser_text"] = reconstructed
+            if reconstructed.strip() != original_text.strip():
+                logger.info(
+                    "Teaser text re-derived from clip span to match audio.\n"
+                    f"  Claude selected: {original_text[:120]}\n"
+                    f"  Clip contains  : {reconstructed[:120]}"
+                )
+
         duration = end_time - start_time
         logger.info(
             f"Teaser final: {start_time:.1f}s - {end_time:.1f}s "
-            f"({duration:.1f}s): {teaser_text[:80]}..."
+            f"({duration:.1f}s) | text-end derived from clip span: "
+            f"{result['teaser_text'][:80]}..."
         )
 
         if status_callback:
             status_callback(
-                f"Teaser selected ({duration:.0f}s): \"{teaser_text[:60]}...\""
+                f"Teaser selected ({duration:.0f}s): \"{result['teaser_text'][:60]}...\""
             )
 
         return result
