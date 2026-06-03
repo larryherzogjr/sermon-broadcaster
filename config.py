@@ -16,15 +16,36 @@ CLAUDE_MODEL_TEASER = os.getenv("CLAUDE_MODEL_TEASER", "claude-opus-4-7")
 # Legacy fallback — if old code references CLAUDE_MODEL, use boundary model
 CLAUDE_MODEL = CLAUDE_MODEL_BOUNDARY
 
-# Transcription: "local" for faster-whisper on CPU, "cloud" for OpenAI Whisper API
+# Legacy transcription toggle (superseded by TRANSCRIBE_BACKEND below).
+# "local" = faster-whisper on CPU, "cloud" = OpenAI Whisper API.
 TRANSCRIBER = os.getenv("TRANSCRIBER", "cloud")
 
-# Local Whisper settings (only used when TRANSCRIBER=local)
+# Transcription backend selector. Supersedes TRANSCRIBER.
+#   "openai"         -> OpenAI Whisper API           (default / fallback)
+#   "local"          -> headless M1 mini mlx-whisper HTTP service
+#   "faster-whisper" -> legacy on-CPU faster-whisper
+# Back-compat: if TRANSCRIBE_BACKEND is unset we derive it from TRANSCRIBER
+# (cloud -> openai, local -> faster-whisper) so existing .env files keep working.
+_legacy_transcriber = (TRANSCRIBER or "").strip().lower()
+_default_backend = "faster-whisper" if _legacy_transcriber == "local" else "openai"
+TRANSCRIBE_BACKEND = os.getenv("TRANSCRIBE_BACKEND", _default_backend).strip().lower()
+
+# Local M1 mini Whisper service (only used when TRANSCRIBE_BACKEND=local).
+# Use the pfSense-reserved static IP, NOT whisper-mini.local (mDNS won't resolve
+# from the Linux VM). Base URL only — "/transcribe" and "/health" are appended.
+WHISPER_LOCAL_URL = os.getenv("WHISPER_LOCAL_URL", "")
+# ~75-min sermon is a 5-8 min synchronous call, so allow a generous timeout.
+WHISPER_LOCAL_TIMEOUT = int(os.getenv("WHISPER_LOCAL_TIMEOUT", "600"))
+# Optional: if set, the local backend dumps the raw mini JSON response here for
+# debugging (off by default). One file per audio basename. Never affects output.
+WHISPER_LOCAL_DEBUG_DIR = os.getenv("WHISPER_LOCAL_DEBUG_DIR", "")
+
+# faster-whisper settings (only used when TRANSCRIBE_BACKEND=faster-whisper)
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "medium")
 WHISPER_DEVICE = "cpu"
 WHISPER_COMPUTE_TYPE = "int8"  # int8 is fastest on CPU
 
-# OpenAI API (only used when TRANSCRIBER=cloud)
+# OpenAI API (only used when TRANSCRIBE_BACKEND=openai)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Audio defaults
