@@ -36,6 +36,9 @@ TRANSCRIBE_BACKEND = os.getenv("TRANSCRIBE_BACKEND", _default_backend).strip().l
 WHISPER_LOCAL_URL = os.getenv("WHISPER_LOCAL_URL", "")
 # ~75-min sermon is a 5-8 min synchronous call, so allow a generous timeout.
 WHISPER_LOCAL_TIMEOUT = int(os.getenv("WHISPER_LOCAL_TIMEOUT", "600"))
+# Optional: if set, the local backend dumps the raw mini JSON response here for
+# debugging (off by default). One file per audio basename. Never affects output.
+WHISPER_LOCAL_DEBUG_DIR = os.getenv("WHISPER_LOCAL_DEBUG_DIR", "")
 
 # faster-whisper settings (only used when TRANSCRIBE_BACKEND=faster-whisper)
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "medium")

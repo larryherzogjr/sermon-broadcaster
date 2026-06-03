@@ -114,6 +114,22 @@ def _transcribe_local(audio_path: str, status_callback=None) -> dict:
             f"Local Whisper service returned non-JSON response: {resp.text[:300]}"
         ) from e
 
+    # Optional debug capture of the RAW mini response (off unless configured).
+    # Wrapped so a dump failure can never break transcription.
+    if config.WHISPER_LOCAL_DEBUG_DIR:
+        try:
+            import json as _json
+            os.makedirs(config.WHISPER_LOCAL_DEBUG_DIR, exist_ok=True)
+            base = os.path.splitext(os.path.basename(audio_path))[0]
+            dump_path = os.path.join(
+                config.WHISPER_LOCAL_DEBUG_DIR, f"{base}.local_raw.json"
+            )
+            with open(dump_path, "w") as _f:
+                _json.dump(data, _f)
+            logger.info(f"Local raw transcript dumped to {dump_path}")
+        except Exception as _e:  # noqa: BLE001
+            logger.warning(f"Local transcript debug dump failed (ignored): {_e}")
+
     result = _normalize_local(data)
 
     logger.info(
