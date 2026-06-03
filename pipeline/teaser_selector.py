@@ -10,32 +10,35 @@ import config
 
 logger = logging.getLogger(__name__)
 
-TEASER_PROMPT = """You are selecting a short audio teaser clip from a sermon transcript for a radio broadcast intro. The teaser plays during the introduction to hook listeners.
+TEASER_PROMPT = """You are choosing a short audio TEASER from a sermon transcript. It plays during the radio intro and has one job: make a listener stop and want to hear the whole sermon.
 
-DURATION:
-The teaser should be 13-20 seconds of spoken audio. Pick a COMPLETE, self-contained thought that naturally falls within that range — don't pad it out, and don't cut a powerful passage short just to save a few seconds. 20 seconds maximum.
+WHAT MAKES A GREAT TEASER — pick the single most compelling moment:
+- A vivid image, story, or illustration at its peak.
+- A provocative question, or a question-and-answer that lands.
+- A striking, bold, or surprising claim.
+- A moment of tension, conviction, or resolution.
+- Speaks TO the listener — "you", "we", "us" — not abstract exposition.
+Pick the passage you'd put on a billboard for this sermon. Favor heat over tidiness.
 
-Content requirements:
-- Must be a single, self-contained thought — makes sense without context.
-- Should be COMPELLING — a vivid illustration, powerful statement, provocative question, or key insight.
-- Should make the listener want to hear the full sermon.
-- Must start at the beginning of a sentence and end at the end of a sentence.
-- Prefer the pastor's own teaching over direct Bible verse reading.
-- Should NOT be from the very beginning or very end of the sermon.
+LENGTH — this matters:
+- 13-20 seconds of speech. That is normally 2-4 sentences that BUILD — a setup and a payoff — NOT a single short sentence.
+- Do NOT pick a lone one-liner; on air it plays as an abrupt fragment. If your favorite line is short, include the surrounding sentences that complete the thought.
+- Never under 13 seconds. 20 seconds maximum.
 
-ABSOLUTE CRITICAL REQUIREMENT — VERBATIM COPYING:
-- teaser_text MUST be copied character-for-character from the transcript above.
-- DO NOT paraphrase, rewrite, fix grammar, clean up filler words, or "improve" the text.
-- DO NOT combine sentences from different parts of the sermon.
-- DO NOT change verb tense, pronouns, or any word.
-- The transcript may have transcription errors, repetitions, or odd phrasing — copy those exactly as they appear.
-- If a passage is too rough to use verbatim, pick a DIFFERENT passage. Do not "clean up" a rough one.
-- Your text will be searched in the transcript word-for-word. If the words don't match exactly, the system will fail.
+AVOID:
+- Dry exposition, throat-clearing, or mid-illustration fragments that need prior context to make sense.
+- Plain Bible-verse reading — prefer the pastor's own words.
+- The very opening or the very end of the sermon.
+
+HOW TO QUOTE IT (so the system can find the audio):
+- Copy the passage from the transcript AS IT APPEARS — including any transcription errors, odd phrasing, or repeated words. Do NOT clean it up, fix grammar, or paraphrase.
+- We locate the clip by matching your quote against the transcript, then rebuild the displayed text from the audio itself — so an exact quote is only needed to FIND the passage, not for the final wording.
+- Make sure your quote (especially its first sentence) appears word-for-word in the transcript above.
 
 Respond ONLY with a JSON object (no markdown, no extra text):
 {
-    "teaser_text": "EXACT verbatim words from the transcript. Copy from the transcript above. DO NOT rephrase.",
-    "reason": "Brief explanation of why this clip was chosen"
+    "teaser_text": "The passage copied from the transcript above — 2-4 sentences, ~13-20 seconds of speech, building to a payoff.",
+    "reason": "One sentence: why this is the most compelling hook."
 }"""
 
 
@@ -254,15 +257,16 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
         # the assembler fade-cuts anything longer — so when a selection overruns
         # we TRIM it back to a complete thought; we never extend past the budget.
         MAX_DURATION = 22.0
-        MIN_DURATION = 10.0
+        MIN_DURATION = 12.0
+        TARGET_DURATION = 16.0
+
+        def _ends_sentence(word_str):
+            w = word_str.strip()
+            return w.endswith((".", "?", "!"))
 
         if raw_duration > MAX_DURATION:
             clip_words = [w for w in words if start_time <= w["start"] <= end_time]
             budget_end = start_time + MAX_DURATION
-
-            def _ends_sentence(word_str):
-                w = word_str.strip()
-                return w.endswith((".", "?", "!"))
 
             sentence_ends = [
                 w for w in clip_words
@@ -303,10 +307,37 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
                         f"'{trimmed_end_word['word']}' ({end_time - start_time:.1f}s)"
                     )
         elif raw_duration < MIN_DURATION:
-            logger.warning(
-                f"Teaser is short ({raw_duration:.1f}s, target 13s) — "
-                f"Claude selected too little text"
-            )
+            # Too short — Claude picked a one-liner (or matching located only
+            # the first sentence). Extend the END forward across following
+            # sentence boundaries to reach the target length, without exceeding
+            # MAX_DURATION. The displayed text is re-derived from the final span
+            # below, so audio and text stay in sync.
+            budget_end = start_time + MAX_DURATION
+            extend_to = None
+            for w in words:
+                if w["start"] < end_time - 0.05:
+                    continue  # still inside / before the current clip
+                if w["end"] > budget_end:
+                    break     # past the 22s ceiling
+                if _ends_sentence(w["word"]):
+                    extend_to = w
+                    if (w["end"] - start_time) >= TARGET_DURATION:
+                        break  # reached target on a clean sentence boundary
+
+            if extend_to is not None and extend_to["end"] > end_time:
+                new_end = extend_to["end"] + 0.2
+                logger.info(
+                    f"Teaser too short ({raw_duration:.1f}s); extended to "
+                    f"SENTENCE boundary: {start_time:.1f}s - {new_end:.1f}s "
+                    f"({new_end - start_time:.1f}s, ends at '{extend_to['word']}')"
+                )
+                end_time = new_end
+            else:
+                logger.warning(
+                    f"Teaser is short ({raw_duration:.1f}s) and no sentence "
+                    f"boundary fits within {MAX_DURATION:.0f}s to extend into — "
+                    f"leaving as is"
+                )
 
         result["teaser_start"] = start_time
         result["teaser_end"] = end_time
