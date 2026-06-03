@@ -242,15 +242,30 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
 
         logger.info(f"[REFINE] Sermon start phrase: '{first_phrase[:50]}...'")
 
-        # Search for this sequence in the word timestamps near Claude's start.
-        # Use a wider window (±180s) since Claude's segment timestamps can be
-        # off by minutes when there's a hymn/musical interlude near the start.
-        search_begin = sermon_start - 180
-        search_end = sermon_start + 180
+        # Search for this sequence in the word timestamps.
+        #
+        # Window width depends on how specific the phrase is. A long, verbatim
+        # citation (>=4 words, e.g. "Genesis chapter 1 beginning at") is a
+        # unique anchor, so we search a WIDE window — this recovers cases where
+        # Claude's timestamp is off by minutes but the citation is present and
+        # unique (observed with local-Whisper transcripts: Claude returned the
+        # correct start *phrase* but a start *timestamp* ~10 min late, latching
+        # the old ±180s window onto a generic mid-sermon "Genesis chapter 1").
+        # Short (2-3 word) phrases are ambiguous, so we keep them near Claude's
+        # estimate to avoid grabbing an earlier coincidental mention. In all
+        # cases the loop takes the EARLIEST match (word order), so a unique long
+        # citation wins over later generic repeats.
 
         # Try progressively shorter matches: 5 words, 4, 3, then 2
         for match_len in range(min(5, len(all_search_words)), 1, -1):
             search_words = all_search_words[:match_len]
+
+            if match_len >= 4:
+                search_begin = sermon_start - 900   # 15 min back
+                search_end = sermon_start + 300
+            else:
+                search_begin = sermon_start - 180
+                search_end = sermon_start + 180
 
             for i, w in enumerate(words):
                 if w["start"] < search_begin or w["start"] > search_end:
