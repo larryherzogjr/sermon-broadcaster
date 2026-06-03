@@ -114,7 +114,19 @@ def _select_content_combination(boundaries: dict, sermon_target: float,
     # If scripture exists, the start is at scripture_start; the broadcast then
     # plays continuously through scripture → (stand cue) → opening prayer →
     # (sit cue) → body. To "exclude" the opening prayer, start at body instead.
-    base_start = scripture_start if has_scripture else sermon_body_start
+    #
+    # Starting at sermon_body_start only makes sense when there's an opening
+    # prayer to skip. With NO scripture and NO opening prayer, sermon_body_start
+    # just drops the sermon's opening (e.g. an inline scripture reading) — and
+    # it's a raw Claude field that swings run-to-run (e.g. 1962s vs 2006s on the
+    # same sermon). In that case, open at the refined, word-snapped sermon_start
+    # for a consistent, complete start.
+    if has_scripture:
+        base_start = scripture_start
+    elif has_opening_prayer:
+        base_start = sermon_body_start
+    else:
+        base_start = boundaries["sermon_start"]
     options.append({
         "start": base_start,
         "end": end_with,
