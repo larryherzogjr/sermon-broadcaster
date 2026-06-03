@@ -99,15 +99,23 @@ def transcribe(audio_path: str, status_callback=None) -> dict:
 
     data = response.json()
 
-    # Build segments from the response
+    # Build segments from the response. Preserve optional confidence fields when
+    # present so the boundary logic can rely on them on EITHER backend (parity
+    # with the local normalizer). Purely additive — consumers that only read
+    # start/end/text are unaffected.
+    _SEGMENT_EXTRA_FIELDS = ("no_speech_prob", "avg_logprob", "compression_ratio")
     segments = []
     if "segments" in data:
         for seg in data["segments"]:
-            segments.append({
+            seg_out = {
                 "start": seg["start"],
                 "end": seg["end"],
                 "text": seg["text"].strip(),
-            })
+            }
+            for key in _SEGMENT_EXTRA_FIELDS:
+                if key in seg and seg[key] is not None:
+                    seg_out[key] = seg[key]
+            segments.append(seg_out)
 
     # Build words list
     words = []

@@ -176,13 +176,11 @@ def _select_content_combination(boundaries: dict, sermon_target: float,
         )
     return chosen
 
-# Select transcriber based on config
-if config.TRANSCRIBER == "cloud":
-    from pipeline.transcriber_cloud import transcribe
-    logger.info("Using cloud transcriber (OpenAI Whisper API)")
-else:
-    from pipeline.transcriber import transcribe
-    logger.info("Using local transcriber (faster-whisper)")
+# Transcription goes through the normalizing dispatcher, which selects the
+# backend via config.TRANSCRIBE_BACKEND (openai | local | faster-whisper) and
+# returns one identical dict shape so downstream stays backend-agnostic.
+from pipeline.transcription import transcribe
+logger.info(f"Transcription backend: {config.TRANSCRIBE_BACKEND}")
 
 # ── Cache helpers ────────────────────────────────────────────────────
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
