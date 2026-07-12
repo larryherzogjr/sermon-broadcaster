@@ -10,8 +10,12 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # Boundary detection is mechanical (find start/end), Sonnet handles fine.
 # Teaser selection requires more "taste" — Opus can pick more compelling clips
 # and copy text more reliably verbatim, reducing retries.
-CLAUDE_MODEL_BOUNDARY = os.getenv("CLAUDE_MODEL_BOUNDARY", "claude-sonnet-4-20250514")
-CLAUDE_MODEL_TEASER = os.getenv("CLAUDE_MODEL_TEASER", "claude-opus-4-7")
+# NOTE: claude-sonnet-4-20250514 was retired 2026-06-15 (API returns 404).
+# claude-sonnet-5 is the replacement. The boundary call disables thinking
+# (see boundary_detector.py) because Sonnet 5 enables adaptive thinking by
+# default, which would put a thinking block first in response.content.
+CLAUDE_MODEL_BOUNDARY = os.getenv("CLAUDE_MODEL_BOUNDARY", "claude-sonnet-5")
+CLAUDE_MODEL_TEASER = os.getenv("CLAUDE_MODEL_TEASER", "claude-opus-4-8")
 
 # Legacy fallback — if old code references CLAUDE_MODEL, use boundary model
 CLAUDE_MODEL = CLAUDE_MODEL_BOUNDARY
@@ -47,6 +51,20 @@ WHISPER_COMPUTE_TYPE = "int8"  # int8 is fastest on CPU
 
 # OpenAI API (only used when TRANSCRIBE_BACKEND=openai)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# ── YouTube download (yt-dlp) ─────────────────────────────────────────
+# Optional path to a Netscape-format cookies.txt exported from a logged-in
+# browser. This is the single most effective fix for YouTube's server-side
+# "Sign in to confirm you're not a bot" block. Empty = run without cookies.
+YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "")
+# Comma-separated yt-dlp player clients to try, in order. Rotating clients is
+# the primary workaround for bot-detection — "tv"/mobile clients are often
+# reachable when the "web" client is blocked. Empty = yt-dlp defaults.
+YTDLP_PLAYER_CLIENTS = os.getenv("YTDLP_PLAYER_CLIENTS", "tv,web_safari,ios,android,web")
+# How many times to attempt the download when the error looks transient
+# (throttling, 429, network blips). Non-retryable errors (private/removed/
+# members-only) fail immediately regardless of this.
+YTDLP_MAX_ATTEMPTS = int(os.getenv("YTDLP_MAX_ATTEMPTS", "3"))
 
 # Audio defaults
 DEFAULT_TARGET_DURATION = "27:18"          # Sermon-only target (no bumpers)
@@ -85,7 +103,7 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "larryherzogjr/sermon-broadcaster")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 FEEDBACK_SOFT_CAP = 5
 FEEDBACK_HARD_CAP = 8
-CLAUDE_MODEL_FEEDBACK = os.getenv("CLAUDE_MODEL_FEEDBACK", "claude-opus-4-7")
+CLAUDE_MODEL_FEEDBACK = os.getenv("CLAUDE_MODEL_FEEDBACK", "claude-opus-4-8")
 
 os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)

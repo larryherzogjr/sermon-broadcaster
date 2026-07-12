@@ -943,6 +943,11 @@ def detect_boundaries(transcript_data: dict, status_callback=None) -> dict:
             response = client.messages.create(
                 model=config.CLAUDE_MODEL_BOUNDARY,
                 max_tokens=1024,
+                # Sonnet 5 enables adaptive thinking by default; disable it so
+                # response.content[0] is the text block this parser expects
+                # (and to keep this mechanical call fast/cheap — no thinking
+                # tokens). Harmless on models where thinking is already off.
+                thinking={"type": "disabled"},
                 system=BOUNDARY_PROMPT,
                 messages=[
                     {
