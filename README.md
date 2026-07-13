@@ -7,6 +7,8 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 ## Features
 
 - **Two input methods:** YouTube URL or direct video/audio file upload (up to 2 GB)
+- **Human review editor** with a waveform, clickable transcript, and exact sermon/teaser markers
+- **Two-stage workflow:** analyze once, review selections, then render without downloading or transcribing again
 - **Intelligent sermon boundary detection** using Claude API with word-level timestamp refinement
   - Snaps end boundary to "Amen" before liturgical transitions ("let us stand," "stand and sing")
   - Handles both with-prayer and without-prayer endpoints, picks whichever fits best
@@ -41,14 +43,15 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
        └─ assembler.py         (intro + sermon + outro concatenation)
 ```
 
-## Pipeline Stages
+## Review Workflow
 
-1. **Download/Convert** — YouTube via yt-dlp, or ffmpeg conversion for uploads
-2. **Transcribe** — OpenAI Whisper API with word-level timestamps (Opus compression for alignment)
-3. **Detect boundaries** — Claude identifies sermon start/end, then word-level refinement snaps to exact positions
-4. **Extract sermon segment** — Direct sample-accurate extraction from raw audio
-5. **Fit to duration** — Silence trim/expand + tempo adjustment to hit target length
-6. **Assemble output(s)** — Sermon-only, dynamic-teaser variant, and/or stock-teaser variant
+1. **Analyze** — download/convert, transcribe, build the waveform, and generate optional AI suggestions
+2. **Review** — confirm sermon start/end and teaser start/end in the browser
+3. **Preflight** — show the selected duration, available sermon time, warnings, and blockers
+4. **Render** — extract the confirmed sermon, fit it conservatively, mix the teaser, and assemble output(s)
+5. **Verify** — reject unsafe stretching or a result that cannot meet the required duration
+
+Analysis artifacts are stored under `state/review_jobs/<job_id>/` so a review can be resumed from Job History.
 
 ## Setup
 
@@ -105,6 +108,7 @@ sudo systemctl start sermon-broadcaster
 0 3 * * 0 find /opt/sermon-broadcaster/pipeline/cache -type f -mtime +30 -delete
 0 3 * * 0 find /opt/sermon-broadcaster/output -type f -mtime +60 -delete
 0 3 * * 0 find /opt/sermon-broadcaster/uploads -type f -mtime +7 -delete
+0 3 * * 0 find /opt/sermon-broadcaster/state/review_jobs -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
 ```
 
 ## Configuration

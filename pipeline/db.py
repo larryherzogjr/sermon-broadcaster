@@ -95,8 +95,13 @@ def mark_orphans_failed():
     with _connect() as conn:
         conn.execute(
             "UPDATE jobs SET status='failed', error=?, completed_at=? "
-            "WHERE status IN ('queued','running')",
+            "WHERE status IN ('queued','running','analyzing')",
             ("Server restarted during processing", _now()),
+        )
+        conn.execute(
+            "UPDATE jobs SET status='awaiting_review', error=? "
+            "WHERE status='rendering' AND metadata_json IS NOT NULL",
+            ("Server restarted during rendering. Your selections were preserved; render again.",),
         )
 
 
@@ -117,7 +122,7 @@ def create_job(job_id, source, source_type, target_duration,
 def append_message(job_id, ts, text):
     with _connect() as conn:
         conn.execute(
-            "UPDATE jobs SET status='running' WHERE id=? AND status='queued'",
+            "UPDATE jobs SET status='analyzing' WHERE id=? AND status='queued'",
             (job_id,),
         )
         conn.execute(
@@ -126,9 +131,65 @@ def append_message(job_id, ts, text):
         )
 
 
-def set_result(job_id, outputs, metadata):
+def set_status(job_id, status):
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET status=?, error=NULL WHERE id=?",
+            (status, job_id),
+        )
+
+
+def _load_metadata_value(raw):
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def get_metadata(job_id):
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT metadata_json FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        return _load_metadata_value(row["metadata_json"]) if row else None
+
+
+def set_analysis_ready(job_id, metadata):
     metadata_json = json.dumps(metadata, default=str)
     with _connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET status='awaiting_review', error=NULL, "
+            "metadata_json=? WHERE id=?",
+            (metadata_json, job_id),
+        )
+
+
+def update_metadata(job_id, updates):
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT metadata_json FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("Job not found")
+        metadata = _load_metadata_value(row["metadata_json"])
+        metadata.update(updates or {})
+        conn.execute(
+            "UPDATE jobs SET metadata_json=? WHERE id=?",
+            (json.dumps(metadata, default=str), job_id),
+        )
+
+
+def set_result(job_id, outputs, metadata):
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT metadata_json FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        merged = _load_metadata_value(existing["metadata_json"] if existing else None)
+        merged.update(metadata or {})
+        metadata_json = json.dumps(merged, default=str)
         conn.execute("BEGIN")
         try:
             conn.execute(
@@ -136,6 +197,7 @@ def set_result(job_id, outputs, metadata):
                 "WHERE id=?",
                 (_now(), metadata_json, job_id),
             )
+            conn.execute("DELETE FROM job_outputs WHERE job_id=?", (job_id,))
             for out in outputs:
                 conn.execute(
                     "INSERT INTO job_outputs (job_id, variant, filename, note) "
@@ -154,6 +216,15 @@ def set_error(job_id, error_str):
         conn.execute(
             "UPDATE jobs SET status='failed', error=?, completed_at=? WHERE id=?",
             (error_str, _now(), job_id),
+        )
+
+
+def set_review_error(job_id, error_str):
+    """Return a failed render to the editor so selections can be adjusted."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET status='awaiting_review', error=? WHERE id=?",
+            (error_str, job_id),
         )
 
 
@@ -189,9 +260,16 @@ def _row_to_job_dict(conn, row):
         "source_type": row["source_type"],
         "target_duration": row["target_duration"],
         "status": status,
+        "include_dynamic": bool(row["include_dynamic"]),
+        "include_stock": bool(row["include_stock"]),
+        "sermon_only": bool(row["sermon_only"]),
         "messages": messages,
         "feedback": feedback,
     }
+
+    meta = _load_metadata_value(row["metadata_json"])
+    if meta.get("review"):
+        d["review"] = meta["review"]
 
     if status == "complete":
         outs = conn.execute(
@@ -207,13 +285,6 @@ def _row_to_job_dict(conn, row):
                 "note": o["note"] or "",
                 "available": os.path.exists(os.path.join(config.OUTPUT_DIR, filename)),
             })
-
-        meta = {}
-        if row["metadata_json"]:
-            try:
-                meta = json.loads(row["metadata_json"])
-            except (ValueError, TypeError):
-                meta = {}
 
         d["result"] = {
             "output_filename": outputs[0]["filename"] if outputs else None,
@@ -244,7 +315,7 @@ def get_job(job_id):
 def list_jobs(limit=200):
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM jobs WHERE status IN ('complete','failed') "
+            "SELECT * FROM jobs WHERE status IN ('complete','failed','awaiting_review') "
             "ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()

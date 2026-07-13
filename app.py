@@ -13,7 +13,15 @@ from werkzeug.utils import secure_filename
 import config
 from pipeline import db
 from pipeline import feedback
-from pipeline.orchestrator import run_pipeline
+from pipeline.review_workflow import (
+    analyze_job,
+    build_preflight,
+    create_teaser_preview,
+    load_transcript,
+    parse_duration,
+    render_job,
+    review_job_dir,
+)
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -81,31 +89,45 @@ class Job:
         db.set_error(self.job_id, error_str)
 
 
-def _run_job(job: Job):
-    """Run the pipeline in a background thread."""
+def _run_analysis(job: Job):
+    """Prepare persisted audio/transcript artifacts, then pause for review."""
     try:
-        result = run_pipeline(
+        db.set_status(job.job_id, "analyzing")
+        metadata = analyze_job(
+            job.job_id,
             youtube_url=job.youtube_url,
             local_file=job.local_file,
             target_duration=job.target_duration,
-            include_bumpers_dynamic=job.include_bumpers_dynamic,
-            include_bumpers_stock=job.include_bumpers_stock,
+            include_dynamic=job.include_bumpers_dynamic,
+            include_stock=job.include_bumpers_stock,
             sermon_only=job.sermon_only,
             status_callback=job.update_status,
         )
-        metadata = {
-            "boundaries": result.get("boundaries"),
-            "processing": result.get("processing"),
-            "timing": result.get("timing"),
-            "teaser": result.get("teaser"),
-            "transcript_summary": result.get("transcript"),
-            "broadcast_duration": result.get("broadcast_duration"),
-            "include_bumpers": result.get("include_bumpers"),
-        }
-        job.set_result(result.get("outputs", []), metadata)
+        db.set_analysis_ready(job.job_id, metadata)
+        job.update_status("Analysis complete. Review the sermon and teaser selections.")
     except Exception as e:
         job.set_error(str(e))
-        logger.exception(f"Job {job.job_id} failed")
+        logger.exception(f"Analysis for job {job.job_id} failed")
+
+
+def _run_render(job_id: str, selections: dict):
+    """Render confirmed selections in a background thread."""
+    try:
+        metadata = db.get_metadata(job_id)
+        if not metadata:
+            raise ValueError("Review data is no longer available for this job")
+        db.set_status(job_id, "rendering")
+
+        def update(message):
+            ts = datetime.now().strftime("%H:%M:%S")
+            db.append_message(job_id, ts, message)
+            logger.info(f"[Job {job_id}] {message}")
+
+        result = render_job(job_id, metadata, selections, status_callback=update)
+        db.set_result(job_id, result.pop("outputs", []), result)
+    except Exception as e:
+        db.set_review_error(job_id, str(e))
+        logger.exception(f"Render for job {job_id} failed")
 
 
 # ── Routes ───────────────────────────────────────────────────────────
@@ -119,50 +141,39 @@ def index():
     )
 
 
+@app.route("/api/analyze", methods=["POST"])
 @app.route("/api/process", methods=["POST"])
 def start_processing():
-    """Start a processing job from YouTube URL (JSON) or file upload (multipart)."""
+    """Analyze a source and pause when it is ready for human review."""
 
-    # Handle file upload (multipart form)
+    local_file = None
     if request.content_type and "multipart" in request.content_type:
         file = request.files.get("file")
         youtube_url = request.form.get("url", "").strip()
-        include_dynamic = request.form.get("include_bumpers_dynamic", "false").lower() == "true"
+        include_dynamic = request.form.get("include_bumpers_dynamic", "true").lower() == "true"
         include_stock = request.form.get("include_bumpers_stock", "false").lower() == "true"
         sermon_only = request.form.get("sermon_only", "false").lower() == "true"
         any_bumpers = include_dynamic or include_stock
         default_dur = config.DEFAULT_BROADCAST_DURATION if any_bumpers else config.DEFAULT_TARGET_DURATION
         target_duration = request.form.get("target_duration", default_dur).strip()
 
-        if file and file.filename and _allowed_file(file.filename):
-            job_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if file and file.filename:
+            if not _allowed_file(file.filename):
+                return jsonify({"error": "That audio/video file type is not supported"}), 400
+            job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filename = secure_filename(f"{job_id}_{file.filename}")
-            filepath = os.path.join(UPLOAD_DIR, filename)
-            file.save(filepath)
-            logger.info(f"File uploaded: {filepath} ({os.path.getsize(filepath) / 1024 / 1024:.1f} MB)")
-
-            job = Job(job_id, target_duration,
-                      source=os.path.basename(filepath),
-                      source_type="upload",
-                      include_bumpers_dynamic=include_dynamic,
-                      include_bumpers_stock=include_stock,
-                      sermon_only=sermon_only,
-                      local_file=filepath)
-
-            thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
-            thread.start()
-            return jsonify({"job_id": job_id, "status": "queued"})
-
-        elif youtube_url:
-            pass
-        else:
+            local_file = os.path.join(UPLOAD_DIR, filename)
+            file.save(local_file)
+            logger.info(
+                "File uploaded: %s (%.1f MB)", local_file,
+                os.path.getsize(local_file) / 1024 / 1024,
+            )
+        elif not youtube_url:
             return jsonify({"error": "Please provide a YouTube URL or upload a video/audio file"}), 400
-
-    # Handle JSON request (YouTube URL)
     else:
         data = request.get_json() or {}
         youtube_url = data.get("url", "").strip()
-        include_dynamic = data.get("include_bumpers_dynamic", False)
+        include_dynamic = data.get("include_bumpers_dynamic", True)
         include_stock = data.get("include_bumpers_stock", False)
         sermon_only = data.get("sermon_only", False)
         if data.get("include_bumpers") and not (include_dynamic or include_stock):
@@ -171,26 +182,30 @@ def start_processing():
         default_dur = config.DEFAULT_BROADCAST_DURATION if any_bumpers else config.DEFAULT_TARGET_DURATION
         target_duration = data.get("target_duration", default_dur).strip()
 
-    if not youtube_url:
+    if not youtube_url and not local_file:
         return jsonify({"error": "Please provide a YouTube URL or upload a file"}), 400
 
-    if "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
+    if youtube_url and "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
         return jsonify({"error": "Please provide a valid YouTube URL"}), 400
 
-    parts = target_duration.split(":")
-    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
-        return jsonify({"error": "Duration must be in MM:SS or HH:MM:SS format"}), 400
+    try:
+        parse_duration(target_duration)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    job_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if not local_file:
+        job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    source = os.path.basename(local_file) if local_file else youtube_url
     job = Job(job_id, target_duration,
-              source=youtube_url,
-              source_type="youtube",
+              source=source,
+              source_type="upload" if local_file else "youtube",
               include_bumpers_dynamic=include_dynamic,
               include_bumpers_stock=include_stock,
               sermon_only=sermon_only,
-              youtube_url=youtube_url)
+              youtube_url=None if local_file else youtube_url,
+              local_file=local_file)
 
-    thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
+    thread = threading.Thread(target=_run_analysis, args=(job,), daemon=True)
     thread.start()
 
     return jsonify({"job_id": job_id, "status": "queued"})
@@ -202,6 +217,103 @@ def job_status(job_id):
     if not j:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(j)
+
+
+@app.route("/api/jobs/<job_id>/transcript")
+def review_transcript(job_id):
+    job = db.get_job(job_id)
+    if not job or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    try:
+        transcript = load_transcript(job_id)
+        return jsonify({
+            "segments": transcript.get("segments", []),
+            "duration": transcript.get("duration", job["review"].get("audio_duration")),
+        })
+    except (OSError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 404
+
+
+@app.route("/api/jobs/<job_id>/waveform")
+def review_waveform(job_id):
+    job = db.get_job(job_id)
+    if not job or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    return send_from_directory(review_job_dir(job_id), "waveform.json", mimetype="application/json")
+
+
+@app.route("/api/jobs/<job_id>/audio")
+def review_audio(job_id):
+    job = db.get_job(job_id)
+    if not job or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    return send_from_directory(
+        review_job_dir(job_id), "raw_audio.wav", mimetype="audio/wav", conditional=True
+    )
+
+
+@app.route("/api/jobs/<job_id>/preflight", methods=["POST"])
+def review_preflight(job_id):
+    job = db.get_job(job_id)
+    if not job or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    try:
+        return jsonify(build_preflight(job["review"], request.get_json() or {}))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/jobs/<job_id>/preview-teaser", methods=["POST"])
+def review_teaser_preview(job_id):
+    job = db.get_job(job_id)
+    metadata = db.get_metadata(job_id)
+    if not job or not metadata or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    try:
+        create_teaser_preview(job_id, metadata, request.get_json() or {})
+        return jsonify({"url": f"/api/jobs/{job_id}/teaser-preview-audio"})
+    except (ValueError, RuntimeError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/jobs/<job_id>/teaser-preview-audio")
+def review_teaser_preview_audio(job_id):
+    job = db.get_job(job_id)
+    if not job or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    return send_from_directory(
+        review_job_dir(job_id), "teaser_preview.wav", mimetype="audio/wav", conditional=True
+    )
+
+
+@app.route("/api/jobs/<job_id>/render", methods=["POST"])
+def review_render(job_id):
+    job = db.get_job(job_id)
+    metadata = db.get_metadata(job_id)
+    if not job or not metadata or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    if job["status"] != "awaiting_review":
+        return jsonify({"error": f"Job is currently {job['status']}"}), 409
+
+    selections = request.get_json() or {}
+    try:
+        preflight = build_preflight(job["review"], selections)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not preflight["ready"]:
+        return jsonify({"error": " ".join(preflight["blockers"]), "preflight": preflight}), 400
+
+    review = dict(metadata["review"])
+    review.update(preflight["selections"])
+    review["markers_confirmed"] = True
+    metadata["review"] = review
+    db.update_metadata(job_id, {"review": review})
+    db.set_status(job_id, "rendering")
+    thread = threading.Thread(
+        target=_run_render, args=(job_id, preflight["selections"]), daemon=True
+    )
+    thread.start()
+    return jsonify({"job_id": job_id, "status": "rendering"})
 
 
 @app.route("/api/download/<filename>")

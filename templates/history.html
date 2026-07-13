@@ -107,6 +107,7 @@
         }
         .badge.complete { background: var(--green); color: #fff; }
         .badge.failed   { background: var(--red);   color: #fff; }
+        .badge.awaiting_review { background: var(--blue); color: #fff; }
         .badge.feedback-none       { background: var(--surface-raised); color: var(--text-muted); }
         .badge.feedback-in_progress{ background: var(--blue); color: #fff; }
         .badge.feedback-submitted  { background: var(--accent-dim); color: #fff; }
@@ -201,8 +202,8 @@
         function renderRow(job) {
             const r = job.result || {};
             const b = r.boundaries || {};
-            const title = b.sermon_title_guess || job.source || '(no title)';
-            const statusClass = job.status === 'complete' ? 'complete' : 'failed';
+            const title = b.sermon_title_guess || (job.review && job.review.title) || job.source || '(no title)';
+            const statusClass = job.status;
 
             const fb = job.feedback || { status: 'none' };
             const fbLabel = {
@@ -221,7 +222,9 @@
             }).join('');
 
             let feedbackBtn = '';
-            if (job.status === 'complete') {
+            if (job.status === 'awaiting_review') {
+                feedbackBtn = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">Continue Review</a>`;
+            } else if (job.status === 'complete') {
                 if (fb.status === 'none') {
                     feedbackBtn = `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Submit Feedback</a>`;
                 } else if (fb.status === 'in_progress') {
