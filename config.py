@@ -97,6 +97,15 @@ WORK_DIR = os.path.join(os.path.dirname(__file__), "work")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DB_PATH = os.path.join(STATE_DIR, "jobs.db")
+# Persisted source audio, transcripts, waveform summaries, and previews for the
+# human review step. These are intentionally separate from WORK_DIR, whose
+# contents are disposable render intermediates.
+REVIEW_DIR = os.path.join(STATE_DIR, "review_jobs")
+
+# Human-review guardrails. Small timing corrections are safe to automate; a
+# large shortfall usually means the selected sermon boundaries are wrong.
+MAX_AUTOMATIC_SHORTFALL_SECONDS = 45
+FINAL_DURATION_TOLERANCE_SECONDS = 2.0
 
 # Feedback / GitHub issue submission
 GITHUB_REPO = os.getenv("GITHUB_REPO", "larryherzogjr/sermon-broadcaster")
@@ -108,3 +117,4 @@ CLAUDE_MODEL_FEEDBACK = os.getenv("CLAUDE_MODEL_FEEDBACK", "claude-opus-4-8")
 os.makedirs(WORK_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(STATE_DIR, exist_ok=True)
+os.makedirs(REVIEW_DIR, exist_ok=True)
