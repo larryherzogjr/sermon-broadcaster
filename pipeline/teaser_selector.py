@@ -260,81 +260,96 @@ def select_teaser(transcript_data: dict, sermon_start: float, sermon_end: float,
         MIN_DURATION = 12.0
         TARGET_DURATION = 16.0
 
+        # A teaser must land on a NATURAL stopping point. Sentence punctuation
+        # is the ideal signal, but the local M1 Whisper backend emits very
+        # sparse punctuation on run-on passages — which is exactly what stranded
+        # an earlier teaser mid-sentence ("...we really shouldn't be surprised
+        # w..."). So we also treat a real speaking PAUSE (a silence gap before
+        # the next word) as a valid boundary. Punctuation is preferred; a pause
+        # is the fallback the sparse-punctuation transcripts need.
+        GAP_BOUNDARY = 0.5  # seconds of silence that marks a clause/sentence pause
+
         def _ends_sentence(word_str):
-            w = word_str.strip()
-            return w.endswith((".", "?", "!"))
+            return word_str.strip().endswith((".", "?", "!"))
+
+        def _gap_after(idx):
+            if idx + 1 < len(words):
+                return words[idx + 1]["start"] - words[idx]["end"]
+            return GAP_BOUNDARY  # last word in the stream — treat as a boundary
+
+        def _is_natural_end(idx):
+            return _ends_sentence(words[idx]["word"]) or _gap_after(idx) >= GAP_BOUNDARY
 
         if raw_duration > MAX_DURATION:
-            clip_words = [w for w in words if start_time <= w["start"] <= end_time]
             budget_end = start_time + MAX_DURATION
-
-            sentence_ends = [
-                w for w in clip_words
-                if w["end"] <= budget_end and _ends_sentence(w["word"])
+            clip_idxs = [
+                i for i, w in enumerate(words)
+                if start_time <= w["start"] and w["end"] <= budget_end
             ]
 
-            if sentence_ends:
-                long_enough = [
-                    w for w in sentence_ends
-                    if (w["end"] - start_time) >= MIN_DURATION
-                ]
-                # Prefer the latest complete sentence that's also long enough;
-                # otherwise take the latest complete sentence (a slightly short
-                # but COMPLETE thought beats a 22s mid-sentence truncation).
-                chosen = long_enough[-1] if long_enough else sentence_ends[-1]
-                end_time = chosen["end"] + 0.2
+            natural_ends = [i for i in clip_idxs if _is_natural_end(i)]
+            long_enough = [
+                i for i in natural_ends
+                if (words[i]["end"] - start_time) >= MIN_DURATION
+            ]
+
+            if natural_ends:
+                # Prefer the latest natural boundary that's also long enough;
+                # otherwise the latest boundary (a slightly short but COMPLETE
+                # thought beats a mid-sentence truncation at the 22s ceiling).
+                chosen_i = long_enough[-1] if long_enough else natural_ends[-1]
+                kind = ("sentence" if _ends_sentence(words[chosen_i]["word"])
+                        else "pause")
+                end_time = words[chosen_i]["end"] + 0.2
                 log_at = logger.info if long_enough else logger.warning
                 log_at(
-                    f"Teaser trimmed to SENTENCE boundary: {start_time:.1f}s - "
+                    f"Teaser trimmed to {kind} boundary: {start_time:.1f}s - "
                     f"{end_time:.1f}s ({end_time - start_time:.1f}s, ends at "
-                    f"'{chosen['word']}')"
+                    f"'{words[chosen_i]['word']}')"
                 )
-            else:
-                # No complete sentence fits the budget (rare: first sentence is
-                # itself > 22s). Trim to the last word boundary; the text is
-                # re-derived below so audio and text still stay in sync.
-                trimmed_end_word = None
-                for w in clip_words:
-                    if w["end"] <= budget_end:
-                        trimmed_end_word = w
-                    else:
-                        break
-                if trimmed_end_word:
-                    end_time = trimmed_end_word["end"] + 0.2
-                    logger.warning(
-                        f"Teaser too long; no sentence boundary fits "
-                        f"{MAX_DURATION:.0f}s — trimmed to word boundary at "
-                        f"'{trimmed_end_word['word']}' ({end_time - start_time:.1f}s)"
-                    )
+            elif clip_idxs:
+                # No sentence OR pause boundary fits the budget (very rare:
+                # unbroken 22s of speech). Trim to the last word boundary; the
+                # text is re-derived below so audio and text still stay in sync.
+                trimmed_i = clip_idxs[-1]
+                end_time = words[trimmed_i]["end"] + 0.2
+                logger.warning(
+                    f"Teaser too long; no sentence/pause boundary fits "
+                    f"{MAX_DURATION:.0f}s — trimmed to word boundary at "
+                    f"'{words[trimmed_i]['word']}' ({end_time - start_time:.1f}s)"
+                )
         elif raw_duration < MIN_DURATION:
             # Too short — Claude picked a one-liner (or matching located only
             # the first sentence). Extend the END forward across following
-            # sentence boundaries to reach the target length, without exceeding
-            # MAX_DURATION. The displayed text is re-derived from the final span
-            # below, so audio and text stay in sync.
+            # natural boundaries (punctuation OR pause) to reach the target
+            # length, without exceeding MAX_DURATION. The displayed text is
+            # re-derived from the final span below, so audio and text stay synced.
             budget_end = start_time + MAX_DURATION
             extend_to = None
-            for w in words:
+            for i, w in enumerate(words):
                 if w["start"] < end_time - 0.05:
                     continue  # still inside / before the current clip
                 if w["end"] > budget_end:
                     break     # past the 22s ceiling
-                if _ends_sentence(w["word"]):
-                    extend_to = w
+                if _is_natural_end(i):
+                    extend_to = i
                     if (w["end"] - start_time) >= TARGET_DURATION:
-                        break  # reached target on a clean sentence boundary
+                        break  # reached target on a natural boundary
 
-            if extend_to is not None and extend_to["end"] > end_time:
-                new_end = extend_to["end"] + 0.2
+            if extend_to is not None and words[extend_to]["end"] > end_time:
+                new_end = words[extend_to]["end"] + 0.2
+                kind = ("sentence" if _ends_sentence(words[extend_to]["word"])
+                        else "pause")
                 logger.info(
                     f"Teaser too short ({raw_duration:.1f}s); extended to "
-                    f"SENTENCE boundary: {start_time:.1f}s - {new_end:.1f}s "
-                    f"({new_end - start_time:.1f}s, ends at '{extend_to['word']}')"
+                    f"{kind} boundary: {start_time:.1f}s - {new_end:.1f}s "
+                    f"({new_end - start_time:.1f}s, ends at "
+                    f"'{words[extend_to]['word']}')"
                 )
                 end_time = new_end
             else:
                 logger.warning(
-                    f"Teaser is short ({raw_duration:.1f}s) and no sentence "
+                    f"Teaser is short ({raw_duration:.1f}s) and no sentence/pause "
                     f"boundary fits within {MAX_DURATION:.0f}s to extend into — "
                     f"leaving as is"
                 )

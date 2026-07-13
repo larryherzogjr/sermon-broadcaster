@@ -226,6 +226,10 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
     # find them in the word-level timestamps, and snap to just before them.
 
     start_refined = False
+    # Which path pinned the start: "quote" (reliable — matched Claude's verbatim
+    # start phrase in the word stream) or "gap" (unreliable fallback — largest
+    # silence near Claude's estimate). Used below to flag mislabeled confidence.
+    start_refine_method = None
     start_reason = boundaries.get("start_reason", "")
 
     # Extract quoted text from start_reason (text between single quotes)
@@ -236,182 +240,206 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
         quoted = re.findall(r'"([^"]+)"', start_reason)
 
     if quoted:
-        # Take the first quoted phrase and extract words for matching
+        # Take the first quoted phrase and extract words for matching. We keep
+        # up to 8 words so the interior-window pass (below) has material to slide
+        # across when the prefix pass fails.
         first_phrase = quoted[0]
-        all_search_words = first_phrase.lower().split()[:6]
+        all_search_words = first_phrase.lower().split()[:8]
 
         logger.info(f"[REFINE] Sermon start phrase: '{first_phrase[:50]}...'")
 
-        # Search for this sequence in the word timestamps.
-        #
-        # Window width depends on how specific the phrase is. A long, verbatim
-        # citation (>=4 words, e.g. "Genesis chapter 1 beginning at") is a
-        # unique anchor, so we search a WIDE window — this recovers cases where
-        # Claude's timestamp is off by minutes but the citation is present and
-        # unique (observed with local-Whisper transcripts: Claude returned the
-        # correct start *phrase* but a start *timestamp* ~10 min late, latching
-        # the old ±180s window onto a generic mid-sermon "Genesis chapter 1").
-        # Short (2-3 word) phrases are ambiguous, so we keep them near Claude's
-        # estimate to avoid grabbing an earlier coincidental mention. In all
-        # cases the loop takes the EARLIEST match (word order), so a unique long
-        # citation wins over later generic repeats.
+        BIBLE_BOOKS = {
+            "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
+            "joshua", "judges", "ruth", "samuel", "kings", "chronicles",
+            "ezra", "nehemiah", "esther", "job", "psalm", "psalms",
+            "proverbs", "ecclesiastes", "song", "isaiah", "jeremiah",
+            "lamentations", "ezekiel", "daniel", "hosea", "joel",
+            "amos", "obadiah", "jonah", "micah", "nahum", "habakkuk",
+            "zephaniah", "haggai", "zechariah", "malachi", "matthew",
+            "mark", "luke", "john", "acts", "romans", "corinthians",
+            "galatians", "ephesians", "philippians", "colossians",
+            "thessalonians", "timothy", "titus", "philemon",
+            "hebrews", "james", "peter", "jude", "revelation",
+        }
+        CHAPTER_VERSE_KEYWORDS = {"chapter", "verse", "verses"}
 
-        # Try progressively shorter matches: 5 words, 4, 3, then 2
-        for match_len in range(min(5, len(all_search_words)), 1, -1):
-            search_words = all_search_words[:match_len]
+        def _looks_like_citation(word_list):
+            """A scripture citation either names a Bible book explicitly, or
+            includes a chapter/verse keyword alongside a numeric token. Bare
+            keywords like 'reading' or 'text' aren't enough — 'please stand
+            for the reading' would otherwise match."""
+            text_words = [
+                w.get("word", "").lower().strip(".,!?;:'\"")
+                for w in word_list
+            ]
+            has_book = any(w in BIBLE_BOOKS for w in text_words)
+            has_chapter_verse = any(
+                w in CHAPTER_VERSE_KEYWORDS for w in text_words
+            )
+            has_number = any(
+                any(c.isdigit() for c in w) for w in text_words
+            )
+            return has_book or (has_chapter_verse and has_number)
 
-            if match_len >= 4:
-                search_begin = sermon_start - 900   # 15 min back
-                search_end = sermon_start + 300
+        def _commit_start_at(i, match_desc):
+            """Given a match at word index i (a word inside Claude's quoted
+            start phrase), back up across the current sentence and any preceding
+            scripture citation, then commit sermon_start.
+
+            Backing up to the sentence start naturally recovers the words BEFORE
+            i in the same utterance, so this is correct whether i is the first
+            matched word (prefix pass) or an interior one (interior-window pass).
+            """
+            nonlocal start_refined, start_refine_method
+
+            # Pass 1: collect sentence boundaries going backward.
+            # boundary_starts[k] = (idx, label) where idx is the FIRST word of a
+            # sentence above a boundary.
+            look_back_limit = words[i]["start"] - 30.0
+            boundary_starts = []
+            for j in range(i - 1, -1, -1):
+                if words[j]["end"] < look_back_limit:
+                    break
+
+                is_boundary = False
+                boundary_label = None
+
+                if j + 1 < len(words):
+                    gap = words[j + 1]["start"] - words[j]["end"]
+                    if gap > 1.5:
+                        is_boundary = True
+                        boundary_label = f"silence ({gap:.1f}s)"
+
+                if not is_boundary:
+                    prev_word_raw = words[j].get("word", "").strip()
+                    if prev_word_raw.endswith((".", "?", "!")):
+                        is_boundary = True
+                        boundary_label = f"sentence end '{prev_word_raw}'"
+
+                if is_boundary:
+                    boundary_starts.append((j + 1, boundary_label))
+
+            # Pass 2: decide how far back to go.
+            sentence_start_idx = i
+            backed_up_reason = None
+
+            if boundary_starts:
+                # Default: stop at first boundary (start of current sentence —
+                # the one containing the match).
+                sentence_start_idx = boundary_starts[0][0]
+                backed_up_reason = boundary_starts[0][1]
+
+                # Walk further back across citation-like sentences.
+                # boundary_starts[k+1] is the start of the sentence ABOVE
+                # boundary_starts[k]. Check that "above" sentence; if citation,
+                # include it.
+                for k in range(len(boundary_starts) - 1):
+                    sent_start = boundary_starts[k + 1][0]
+                    sent_end_excl = boundary_starts[k][0]
+                    if sent_end_excl <= sent_start:
+                        break
+                    sentence_words = words[sent_start:sent_end_excl]
+                    sent_dur = (
+                        words[sent_end_excl - 1]["end"]
+                        - words[sent_start]["start"]
+                    )
+                    if (sent_dur <= 12.0
+                            and _looks_like_citation(sentence_words)):
+                        sentence_start_idx = sent_start
+                        backed_up_reason = (
+                            f"citation across {boundary_starts[k + 1][1]}"
+                        )
+                    else:
+                        break
+
+            new_start = words[sentence_start_idx]["start"] - 0.3
+            old_start = boundaries["sermon_start"]
+            boundaries["sermon_start"] = new_start
+            start_refined = True
+            start_refine_method = "quote"
+            if sentence_start_idx != i:
+                logger.info(
+                    f"[REFINE] Start matched ({match_desc}) at "
+                    f"{words[i]['start']:.1f}s; backed up to "
+                    f"'{words[sentence_start_idx]['word']}' at "
+                    f"{words[sentence_start_idx]['start']:.1f}s "
+                    f"({backed_up_reason}; was {old_start:.1f}s)"
+                )
             else:
-                search_begin = sermon_start - 180
-                search_end = sermon_start + 180
+                logger.info(
+                    f"[REFINE] Start matched ({match_desc}) at "
+                    f"{words[i]['start']:.1f}s (was {old_start:.1f}s)"
+                )
+            if status_callback:
+                status_callback(
+                    f"Refined start: '{first_phrase[:40]}...' at "
+                    f"{words[sentence_start_idx]['start']:.0f}s"
+                )
 
+        def _window_bounds(seq_len):
+            """Search window for a match of `seq_len` consecutive words. A long,
+            verbatim citation (>=4 words) is a unique anchor, so we search WIDE —
+            this recovers cases where Claude's timestamp is off by minutes but
+            the phrase is present and unique. Short (2-3 word) sequences are
+            ambiguous, so we keep them near Claude's estimate to avoid grabbing
+            an earlier coincidental mention."""
+            if seq_len >= 4:
+                return sermon_start - 900, sermon_start + 300   # 15 min back
+            return sermon_start - 180, sermon_start + 180
+
+        def _find_sequence(target):
+            """Earliest stream index where `target` (already punctuation-stripped)
+            appears as consecutive words within its search window, or None."""
+            search_begin, search_end = _window_bounds(len(target))
             for i, w in enumerate(words):
                 if w["start"] < search_begin or w["start"] > search_end:
                     continue
-
-                if i + match_len > len(words):
+                if i + len(target) > len(words):
                     continue
-
                 candidate = [
                     words[i + j]["word"].lower().strip(".,!?;:'\"")
-                    for j in range(match_len)
+                    for j in range(len(target))
                 ]
-
-                target = [sw.strip(".,!?;:'\"") for sw in search_words]
-
                 if candidate == target:
-                    # Back up to capture any preceding citation/announcement.
-                    # Two-pass approach:
-                    # 1. Collect sentence-boundary indices going backward.
-                    # 2. Walk through them, checking whether the PREVIOUS sentence
-                    #    (the one we'd cross INTO) looks like a Bible citation.
-                    #    Include it if yes; stop if no.
-                    BIBLE_BOOKS = {
-                        "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
-                        "joshua", "judges", "ruth", "samuel", "kings", "chronicles",
-                        "ezra", "nehemiah", "esther", "job", "psalm", "psalms",
-                        "proverbs", "ecclesiastes", "song", "isaiah", "jeremiah",
-                        "lamentations", "ezekiel", "daniel", "hosea", "joel",
-                        "amos", "obadiah", "jonah", "micah", "nahum", "habakkuk",
-                        "zephaniah", "haggai", "zechariah", "malachi", "matthew",
-                        "mark", "luke", "john", "acts", "romans", "corinthians",
-                        "galatians", "ephesians", "philippians", "colossians",
-                        "thessalonians", "timothy", "titus", "philemon",
-                        "hebrews", "james", "peter", "jude", "revelation",
-                    }
-                    CHAPTER_VERSE_KEYWORDS = {"chapter", "verse", "verses"}
+                    return i
+            return None
 
-                    def _looks_like_citation(word_list):
-                        """A scripture citation either names a Bible book
-                        explicitly, or includes a chapter/verse keyword
-                        alongside a numeric token. Bare keywords like
-                        'reading' or 'text' aren't enough — 'please stand
-                        for the reading' would otherwise match."""
-                        text_words = [
-                            w.get("word", "").lower().strip(".,!?;:'\"")
-                            for w in word_list
-                        ]
-                        has_book = any(w in BIBLE_BOOKS for w in text_words)
-                        has_chapter_verse = any(
-                            w in CHAPTER_VERSE_KEYWORDS for w in text_words
-                        )
-                        has_number = any(
-                            any(c.isdigit() for c in w) for w in text_words
-                        )
-                        return has_book or (has_chapter_verse and has_number)
-
-                    # Pass 1: collect sentence boundaries going backward.
-                    # boundary_starts[k] = (idx, label) where idx is the FIRST
-                    # word of a sentence above a boundary.
-                    look_back_limit = words[i]["start"] - 30.0
-                    boundary_starts = []
-                    for j in range(i - 1, -1, -1):
-                        if words[j]["end"] < look_back_limit:
-                            break
-
-                        is_boundary = False
-                        boundary_label = None
-
-                        if j + 1 < len(words):
-                            gap = words[j + 1]["start"] - words[j]["end"]
-                            if gap > 1.5:
-                                is_boundary = True
-                                boundary_label = f"silence ({gap:.1f}s)"
-
-                        if not is_boundary:
-                            prev_word_raw = words[j].get("word", "").strip()
-                            if prev_word_raw.endswith((".", "?", "!")):
-                                is_boundary = True
-                                boundary_label = (
-                                    f"sentence end '{prev_word_raw}'"
-                                )
-
-                        if is_boundary:
-                            boundary_starts.append((j + 1, boundary_label))
-
-                    # Pass 2: decide how far back to go.
-                    sentence_start_idx = i
-                    backed_up_reason = None
-
-                    if boundary_starts:
-                        # Default: stop at first boundary (start of current
-                        # sentence — the one containing the match).
-                        sentence_start_idx = boundary_starts[0][0]
-                        backed_up_reason = boundary_starts[0][1]
-
-                        # Walk further back across citation-like sentences.
-                        # boundary_starts[k+1] is the start of the sentence
-                        # ABOVE boundary_starts[k]. Check that "above" sentence;
-                        # if citation, include it.
-                        for k in range(len(boundary_starts) - 1):
-                            sent_start = boundary_starts[k + 1][0]
-                            sent_end_excl = boundary_starts[k][0]
-                            if sent_end_excl <= sent_start:
-                                break
-                            sentence_words = words[sent_start:sent_end_excl]
-                            sent_dur = (
-                                words[sent_end_excl - 1]["end"]
-                                - words[sent_start]["start"]
-                            )
-                            if (sent_dur <= 12.0
-                                    and _looks_like_citation(sentence_words)):
-                                sentence_start_idx = sent_start
-                                backed_up_reason = (
-                                    f"citation across "
-                                    f"{boundary_starts[k + 1][1]}"
-                                )
-                            else:
-                                break
-
-                    new_start = words[sentence_start_idx]["start"] - 0.3
-                    old_start = boundaries["sermon_start"]
-                    boundaries["sermon_start"] = new_start
-                    start_refined = True
-                    if sentence_start_idx != i:
-                        logger.info(
-                            f"[REFINE] Start matched ({match_len} words) "
-                            f"'{' '.join(candidate)}' at {words[i]['start']:.1f}s; "
-                            f"backed up to '{words[sentence_start_idx]['word']}' at "
-                            f"{words[sentence_start_idx]['start']:.1f}s "
-                            f"({backed_up_reason}; was {old_start:.1f}s)"
-                        )
-                    else:
-                        logger.info(
-                            f"[REFINE] Start matched ({match_len} words): "
-                            f"'{' '.join(candidate)}' at {words[i]['start']:.1f}s "
-                            f"(was {old_start:.1f}s)"
-                        )
-                    if status_callback:
-                        status_callback(
-                            f"Refined start: '{first_phrase[:40]}...' at "
-                            f"{words[sentence_start_idx]['start']:.0f}s"
-                        )
-                    break
-
-            if start_refined:
+        # PASS A: prefix match. Try progressively shorter leading sequences:
+        # 5 words, 4, 3, then 2. The loop takes the EARLIEST match, so a unique
+        # long citation wins over later generic repeats.
+        for match_len in range(min(5, len(all_search_words)), 1, -1):
+            target = [
+                sw.strip(".,!?;:'\"") for sw in all_search_words[:match_len]
+            ]
+            i = _find_sequence(target)
+            if i is not None:
+                _commit_start_at(i, f"{match_len}-word prefix '{' '.join(target)}'")
                 break
+
+        # PASS B: interior-window match (only if the prefix pass failed).
+        # A mismatch in Claude's FIRST word or two (a paraphrase, or a filler
+        # word Whisper inserted at the utterance start) sinks every prefix
+        # match. Sliding a 4-word window across the quote finds a clean interior
+        # run; _commit_start_at then backs up to the sentence start, recovering
+        # the words ahead of the matched window. This is what rescues a start
+        # that would otherwise drop to the unreliable silence-gap fallback.
+        if not start_refined and len(all_search_words) >= 5:
+            window = 4
+            best_i = None
+            for offset in range(1, len(all_search_words) - window + 1):
+                target = [
+                    sw.strip(".,!?;:'\"")
+                    for sw in all_search_words[offset:offset + window]
+                ]
+                i = _find_sequence(target)
+                if i is not None:
+                    # Approximate the quote's start by stepping back `offset`
+                    # words; the sentence-start backup absorbs any small drift.
+                    cand = max(0, i - offset)
+                    if best_i is None or cand < best_i:
+                        best_i = cand
+            if best_i is not None:
+                _commit_start_at(best_i, "interior window")
 
         if not start_refined:
             # Log what words ARE near Claude's start for debugging
@@ -458,6 +486,7 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
                 old_start = boundaries["sermon_start"]
                 boundaries["sermon_start"] = new_start
                 start_refined = True
+                start_refine_method = "gap"
                 logger.info(
                     f"[REFINE] Start gap (widest): {best_gap:.1f}s silence, "
                     f"speech resumes at {words[best_idx]['start']:.1f}s "
@@ -782,6 +811,31 @@ def _refine_boundaries(boundaries: dict, words: list, status_callback=None) -> d
             f"(sermon_body_start={boundaries['sermon_body_start']:.1f}s is "
             f"{boundaries['sermon_body_start'] - boundaries['sermon_start']:.0f}s later)"
         )
+
+    # ── Reliability guard: unreliable start + expected scripture ─────────
+    # If the start was pinned by the silence-gap fallback (Claude's quoted
+    # start phrase did NOT word-match) AND the broadcast is expected to open on
+    # a Scripture reading, the gap fallback may have landed PAST the reading:
+    # it targets the LARGEST pause near Claude's estimate, and after the opening
+    # prayer that pause is the one right before the sermon body — so the reading
+    # gets clipped (observed on the Psalm 65 job, issue #4). Claude's own
+    # "high" confidence describes its transcript read, not this refinement, so
+    # downgrade it and warn to force a human spot-check of the opening.
+    if start_refine_method == "gap" and boundaries.get("scripture_start") is not None:
+        if boundaries.get("confidence") == "high":
+            boundaries["confidence"] = "medium"
+        logger.warning(
+            "[REFINE] Start pinned by silence-gap fallback while a Scripture "
+            "reading is expected — the reading may be clipped at the top. "
+            "Confidence downgraded to 'medium'."
+        )
+        if status_callback:
+            status_callback(
+                "WARNING: sermon start was set by the silence-gap fallback "
+                "(the quoted start phrase didn't match the transcript) — the "
+                "Scripture reading at the top may be clipped. Please spot-check "
+                "the opening."
+            )
 
     return boundaries
 
