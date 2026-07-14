@@ -13,11 +13,14 @@ EnvironmentFile=/opt/sermon-broadcaster/.env
 #   TRANSCRIBE_BACKEND=openai        # openai (default) | local | faster-whisper
 #   WHISPER_LOCAL_URL=http://10.0.0.50:5005   # mini static IP (not .local)
 #   WHISPER_LOCAL_TIMEOUT=600        # seconds; ~75-min sermon = 5-8 min call
-ExecStart=/opt/sermon-broadcaster/venv/bin/python app.py
+# Keep one worker because in-process analysis/render threads and import-time job
+# reconciliation are not safe across multiple worker processes.
+ExecStart=/opt/sermon-broadcaster/venv/bin/gunicorn --workers 1 --threads 4 --timeout 0 --bind 0.0.0.0:5003 app:app
 Restart=on-failure
 RestartSec=5
 # Large file uploads need time
 TimeoutStartSec=30
+TimeoutStopSec=30
 # Prevent OOM from Whisper if using local transcription
 MemoryMax=8G
 

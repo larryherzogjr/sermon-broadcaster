@@ -5,8 +5,10 @@ Flask app for processing church service videos into broadcast-ready audio.
 import os
 import math
 import logging
+import shutil
 import threading
 from datetime import datetime
+from urllib.parse import urlparse
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
@@ -22,6 +24,7 @@ from pipeline.review_workflow import (
     parse_duration,
     render_job,
     review_job_dir,
+    sermon_target_seconds,
 )
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -33,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # ── Flask App ────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024 * 1024  # 5 GB upload limit
+app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_GB * 1024 * 1024 * 1024
 
 # Upload directory
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -49,6 +52,52 @@ ALLOWED_EXTENSIONS = {"mp4", "mkv", "avi", "mov", "webm", "mp3", "wav", "m4a", "
 
 def _allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError("Boolean options must be true or false")
+
+
+def _is_youtube_url(value):
+    try:
+        parsed = urlparse(value)
+    except (TypeError, ValueError):
+        return False
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    return (
+        parsed.scheme in {"http", "https"}
+        and (hostname == "youtu.be" or hostname == "youtube.com" or hostname.endswith(".youtube.com"))
+    )
+
+
+def _validate_processing_requirements(target_duration, include_dynamic,
+                                      include_stock, sermon_only):
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg is not installed or is not available on PATH")
+
+    backend = (config.TRANSCRIBE_BACKEND or "openai").strip().lower()
+    if backend in {"openai", "cloud"} and not config.OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is required for the OpenAI transcription backend")
+    if backend == "local" and not config.WHISPER_LOCAL_URL:
+        raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
+    if (not sermon_only or include_dynamic) and not config.ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY is required for sermon or teaser analysis")
+
+    # This also validates ffprobe, required bumper files, their durations, and
+    # the relationship between the requested target and the installed bumpers.
+    sermon_target_seconds(target_duration, include_dynamic, include_stock)
 
 
 # ── Job Handle ───────────────────────────────────────────────────────
@@ -139,7 +188,33 @@ def index():
         "index.html",
         default_duration=config.DEFAULT_TARGET_DURATION,
         default_broadcast_duration=config.DEFAULT_BROADCAST_DURATION,
+        stock_available=os.path.isfile(os.path.join(config.ASSETS_DIR, "intro_stock.mp3")),
     )
+
+
+@app.route("/api/health")
+def health():
+    backend = (config.TRANSCRIBE_BACKEND or "openai").strip().lower()
+    checks = {
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+        "ffprobe": bool(shutil.which("ffprobe")),
+        "intro": os.path.isfile(config.INTRO_PATH),
+        "outro": os.path.isfile(config.OUTRO_PATH),
+        "anthropic_key": bool(config.ANTHROPIC_API_KEY),
+        "transcription_backend": backend,
+        "transcription_configured": (
+            bool(config.OPENAI_API_KEY) if backend in {"openai", "cloud"}
+            else bool(config.WHISPER_LOCAL_URL) if backend == "local"
+            else backend in {"faster-whisper", "faster_whisper", "local-cpu"}
+        ),
+        "stock_intro": os.path.isfile(os.path.join(config.ASSETS_DIR, "intro_stock.mp3")),
+    }
+    required = (
+        checks["ffmpeg"], checks["ffprobe"], checks["intro"], checks["outro"],
+        checks["anthropic_key"], checks["transcription_configured"],
+    )
+    ready = all(required)
+    return jsonify({"status": "ok" if ready else "degraded", "checks": checks}), (200 if ready else 503)
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -147,55 +222,63 @@ def index():
 def start_processing():
     """Analyze a source and pause when it is ready for human review."""
 
+    file = None
     local_file = None
-    if request.content_type and "multipart" in request.content_type:
-        file = request.files.get("file")
-        youtube_url = request.form.get("url", "").strip()
-        include_dynamic = request.form.get("include_bumpers_dynamic", "true").lower() == "true"
-        include_stock = request.form.get("include_bumpers_stock", "false").lower() == "true"
-        sermon_only = request.form.get("sermon_only", "false").lower() == "true"
-        any_bumpers = include_dynamic or include_stock
-        default_dur = config.DEFAULT_BROADCAST_DURATION if any_bumpers else config.DEFAULT_TARGET_DURATION
-        target_duration = request.form.get("target_duration", default_dur).strip()
+    try:
+        if request.content_type and "multipart" in request.content_type:
+            file = request.files.get("file")
+            youtube_url = str(request.form.get("url", "") or "").strip()
+            include_dynamic = _as_bool(request.form.get("include_bumpers_dynamic"), True)
+            include_stock = _as_bool(request.form.get("include_bumpers_stock"), False)
+            sermon_only = _as_bool(request.form.get("sermon_only"), False)
+            target_value = request.form.get("target_duration")
+        else:
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, dict):
+                raise ValueError("Request body must be a JSON object")
+            youtube_url = str(data.get("url", "") or "").strip()
+            include_dynamic = _as_bool(data.get("include_bumpers_dynamic"), True)
+            include_stock = _as_bool(data.get("include_bumpers_stock"), False)
+            sermon_only = _as_bool(data.get("sermon_only"), False)
+            if _as_bool(data.get("include_bumpers"), False) and not (include_dynamic or include_stock):
+                include_dynamic = True
+            target_value = data.get("target_duration")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-        if file and file.filename:
-            if not _allowed_file(file.filename):
-                return jsonify({"error": "That audio/video file type is not supported"}), 400
-            job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            filename = secure_filename(f"{job_id}_{file.filename}")
-            local_file = os.path.join(UPLOAD_DIR, filename)
-            file.save(local_file)
-            logger.info(
-                "File uploaded: %s (%.1f MB)", local_file,
-                os.path.getsize(local_file) / 1024 / 1024,
-            )
-        elif not youtube_url:
-            return jsonify({"error": "Please provide a YouTube URL or upload a video/audio file"}), 400
-    else:
-        data = request.get_json() or {}
-        youtube_url = data.get("url", "").strip()
-        include_dynamic = data.get("include_bumpers_dynamic", True)
-        include_stock = data.get("include_bumpers_stock", False)
-        sermon_only = data.get("sermon_only", False)
-        if data.get("include_bumpers") and not (include_dynamic or include_stock):
-            include_dynamic = True
-        any_bumpers = include_dynamic or include_stock
-        default_dur = config.DEFAULT_BROADCAST_DURATION if any_bumpers else config.DEFAULT_TARGET_DURATION
-        target_duration = data.get("target_duration", default_dur).strip()
+    any_bumpers = include_dynamic or include_stock
+    default_duration = (
+        config.DEFAULT_BROADCAST_DURATION if any_bumpers
+        else config.DEFAULT_TARGET_DURATION
+    )
+    target_duration = str(target_value or default_duration).strip()
+    has_upload = bool(file and file.filename)
 
-    if not youtube_url and not local_file:
+    if not youtube_url and not has_upload:
         return jsonify({"error": "Please provide a YouTube URL or upload a file"}), 400
-
-    if youtube_url and "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
+    if has_upload and not _allowed_file(file.filename):
+        return jsonify({"error": "That audio/video file type is not supported"}), 400
+    if not has_upload and not _is_youtube_url(youtube_url):
         return jsonify({"error": "Please provide a valid YouTube URL"}), 400
 
     try:
         parse_duration(target_duration)
-    except ValueError as exc:
+        _validate_processing_requirements(
+            target_duration, include_dynamic, include_stock, sermon_only
+        )
+    except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    if not local_file:
-        job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    if has_upload:
+        filename = secure_filename(f"{job_id}_{file.filename}")
+        local_file = os.path.join(UPLOAD_DIR, filename)
+        file.save(local_file)
+        logger.info(
+            "File uploaded: %s (%.1f MB)", local_file,
+            os.path.getsize(local_file) / 1024 / 1024,
+        )
+
     source = os.path.basename(local_file) if local_file else youtube_url
     job = Job(job_id, target_duration,
               source=source,
@@ -334,8 +417,10 @@ def review_render(job_id):
     review.update(preflight["selections"])
     review["markers_confirmed"] = True
     metadata["review"] = review
-    db.update_metadata(job_id, {"review": review})
-    db.set_status(job_id, "rendering")
+    if not db.claim_render(job_id, review):
+        current = db.get_job(job_id)
+        status = current["status"] if current else "unavailable"
+        return jsonify({"error": f"Job is currently {status}"}), 409
     thread = threading.Thread(
         target=_run_render, args=(job_id, preflight["selections"]), daemon=True
     )
@@ -427,4 +512,4 @@ def feedback_submit(session_id):
 # ── Main ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5003, debug=False)
+    app.run(host=config.APP_HOST, port=config.APP_PORT, debug=False)

@@ -1,5 +1,8 @@
 # Python
 __pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
 *.pyc
 *.pyo
 *.pyd

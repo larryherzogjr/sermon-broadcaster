@@ -25,7 +25,7 @@ from pipeline.assembler import (
 from pipeline.audio_processor import extract_segment, fit_to_duration, get_audio_duration
 from pipeline.boundary_detector import detect_boundaries
 from pipeline.downloader import download_audio
-from pipeline.orchestrator import _select_content_combination
+from pipeline.orchestrator import select_content_combination
 from pipeline.teaser_selector import select_teaser
 from pipeline.transcription import transcribe
 
@@ -108,12 +108,36 @@ def _generate_waveform(audio_path: str, output_path: str, bins: int = 1600) -> d
     return payload
 
 
-def sermon_target_seconds(target_duration: str, include_bumpers: bool) -> tuple[float, dict]:
+def sermon_target_seconds(target_duration: str, include_dynamic: bool,
+                          include_stock: bool = False) -> tuple[float, dict]:
     total = parse_duration(target_duration)
-    bumper_durations = get_bumper_durations() if include_bumpers else {"intro": 0.0, "outro": 0.0}
+    variants = {}
+    if include_dynamic:
+        variants["dynamic"] = get_bumper_durations()
+    if include_stock:
+        stock_intro = os.path.join(config.ASSETS_DIR, "intro_stock.mp3")
+        variants["stock"] = get_bumper_durations(stock_intro, config.OUTRO_PATH)
+
+    if not variants:
+        bumper_durations = {"intro": 0.0, "outro": 0.0, "variants": {}}
+    else:
+        totals = {
+            name: durations["intro"] + durations["outro"]
+            for name, durations in variants.items()
+        }
+        if len(totals) > 1 and max(totals.values()) - min(totals.values()) > 0.25:
+            raise ValueError(
+                "The dynamic and stock intros have different lengths. Select one "
+                "variant or install bumper files with matching total durations."
+            )
+        bumper_durations = dict(next(iter(variants.values())))
+        bumper_durations["variants"] = variants
+
     sermon_target = total - bumper_durations["intro"] - bumper_durations["outro"]
     if sermon_target <= 0:
-        raise ValueError("Target duration is shorter than the intro and outro")
+        if variants:
+            raise ValueError("Target duration is shorter than the intro and outro")
+        raise ValueError("Target duration must be greater than zero")
     return sermon_target, bumper_durations
 
 
@@ -130,7 +154,7 @@ def _initial_boundaries(transcript_data: dict, sermon_only: bool,
 
     boundaries = detect_boundaries(transcript_data, status_callback)
     if "sermon_end_with_prayer" in boundaries:
-        selection = _select_content_combination(boundaries, sermon_target, status_callback)
+        selection = select_content_combination(boundaries, sermon_target, status_callback)
         boundaries["sermon_start"] = selection["start"]
         boundaries["sermon_end"] = selection["end"]
         boundaries["selection_label"] = selection["label"]
@@ -170,6 +194,11 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
     # cloud transcriber's compressed helper file is intentionally not reused;
     # doing so could make a reviewed marker sound slightly different on output.
     transcript_data.pop("transcribed_audio_path", None)
+    for helper_name in ("raw_audio_compressed.ogg", "raw_audio_compressed2.ogg"):
+        try:
+            os.remove(os.path.join(artifact_dir, helper_name))
+        except OSError:
+            pass
     teaser_source_name = "raw_audio.wav"
 
     _write_json(os.path.join(artifact_dir, "transcript.json"), transcript_data)
@@ -177,8 +206,9 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
         status_callback("Building the waveform preview...")
     waveform = _generate_waveform(raw_audio_path, os.path.join(artifact_dir, "waveform.json"))
 
-    include_bumpers = include_dynamic or include_stock
-    target_seconds, bumpers = sermon_target_seconds(target_duration, include_bumpers)
+    target_seconds, bumpers = sermon_target_seconds(
+        target_duration, include_dynamic, include_stock
+    )
     boundaries = _initial_boundaries(
         transcript_data, sermon_only, target_seconds, status_callback
     )
@@ -235,6 +265,12 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
 
 
 def normalize_selections(selections: dict) -> dict:
+    marker_values = [
+        selections.get("sermon_start"), selections.get("sermon_end"),
+        selections.get("teaser_start"), selections.get("teaser_end"),
+    ]
+    if any(isinstance(value, bool) for value in marker_values if value is not None):
+        raise ValueError("Selection markers must be valid times")
     try:
         normalized = {
             "sermon_start": float(selections.get("sermon_start")),
@@ -246,9 +282,14 @@ def normalize_selections(selections: dict) -> dict:
             normalized["teaser_start"] = float(selections["teaser_start"])
         if selections.get("teaser_end") is not None:
             normalized["teaser_end"] = float(selections["teaser_end"])
-        return normalized
     except (TypeError, ValueError):
         raise ValueError("Selection markers must be valid times") from None
+    if any(
+        value is not None and not math.isfinite(value)
+        for value in normalized.values()
+    ):
+        raise ValueError("Selection markers must be finite times")
+    return normalized
 
 
 def build_preflight(review: dict, selections: dict) -> dict:
@@ -355,6 +396,23 @@ def _teaser_text(transcript: dict, start: float, end: float) -> str:
     return " ".join(w for w in words if w).strip()
 
 
+def _validate_output_durations(outputs: list, requested_seconds: float) -> dict:
+    durations = {}
+    for output in outputs:
+        duration = get_audio_duration(output["path"])
+        variant = output.get("variant") or output.get("filename") or "output"
+        durations[variant] = duration
+        output["duration"] = duration
+        difference = duration - requested_seconds
+        if abs(difference) > config.FINAL_DURATION_TOLERANCE_SECONDS:
+            direction = "long" if difference > 0 else "short"
+            raise ValueError(
+                f"The {variant} output is {format_duration(abs(difference))} too "
+                f"{direction} after assembly. Verify the bumper files and render again."
+            )
+    return durations
+
+
 def render_job(job_id: str, metadata: dict, selections: dict,
                status_callback=None) -> dict:
     """Render confirmed selections using the existing production audio stages."""
@@ -374,6 +432,7 @@ def render_job(job_id: str, metadata: dict, selections: dict,
     )
     os.makedirs(work_dir, exist_ok=True)
     started = time.time()
+    output_paths = []
 
     try:
         if status_callback:
@@ -419,6 +478,7 @@ def render_job(job_id: str, metadata: dict, selections: dict,
             mix_teaser_into_intro(config.INTRO_PATH, teaser_audio, teaser_sr, mixed_intro)
             filename = f"sermon_{job_id}_dynamic.mp3"
             output_path = os.path.join(config.OUTPUT_DIR, filename)
+            output_paths.append(output_path)
             assemble_broadcast(
                 mixed_intro, sermon_fitted, config.OUTRO_PATH, output_path, status_callback
             )
@@ -438,6 +498,7 @@ def render_job(job_id: str, metadata: dict, selections: dict,
                 raise RuntimeError("Stock intro file is not installed")
             filename = f"sermon_{job_id}_stock.mp3"
             output_path = os.path.join(config.OUTPUT_DIR, filename)
+            output_paths.append(output_path)
             assemble_broadcast(
                 stock_intro, sermon_fitted, config.OUTRO_PATH, output_path, status_callback
             )
@@ -446,10 +507,13 @@ def render_job(job_id: str, metadata: dict, selections: dict,
         if not review.get("include_dynamic") and not review.get("include_stock"):
             filename = f"sermon_{job_id}.mp3"
             output_path = os.path.join(config.OUTPUT_DIR, filename)
+            output_paths.append(output_path)
             shutil.copy2(sermon_fitted, output_path)
             outputs.append({"filename": filename, "path": output_path, "variant": "sermon-only", "note": ""})
 
-        broadcast_duration = get_audio_duration(outputs[0]["path"]) if outputs else 0.0
+        requested_duration = parse_duration(review["target_duration"])
+        output_durations = _validate_output_durations(outputs, requested_duration)
+        broadcast_duration = next(iter(output_durations.values()), 0.0)
         boundaries = dict(metadata.get("boundaries") or {})
         boundaries.update({
             "sermon_start": selected["sermon_start"],
@@ -467,10 +531,18 @@ def render_job(job_id: str, metadata: dict, selections: dict,
             "processing": processing,
             "teaser": teaser_info,
             "broadcast_duration": broadcast_duration,
+            "output_durations": output_durations,
             "include_bumpers": bool(review.get("include_dynamic") or review.get("include_stock")),
             "timing": {"render": round(time.time() - started, 2)},
             "review": review_result,
             "transcript_summary": metadata.get("transcript_summary"),
         }
+    except Exception:
+        for output_path in output_paths:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+        raise
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

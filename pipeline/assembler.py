@@ -203,23 +203,37 @@ def assemble_broadcast(intro_path: str, sermon_path: str, outro_path: str,
     return output_path
 
 
-def get_bumper_durations() -> dict:
-    """Get the durations of the intro and outro bumpers."""
-    intro_dur = 0.0
-    outro_dur = 0.0
+def _probe_duration(path: str, label: str) -> float:
+    if not os.path.isfile(path):
+        raise RuntimeError(f"Required {label} bumper is missing: {path}")
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffprobe is not installed or is not available on PATH"
+        ) from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip()[-300:] or "unknown ffprobe error"
+        raise RuntimeError(f"Could not inspect {label} bumper: {detail}")
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"ffprobe returned an invalid duration for {label}") from exc
+    if not np.isfinite(duration) or duration <= 0:
+        raise RuntimeError(f"The {label} bumper has an invalid duration")
+    return duration
 
-    for path, name in [(config.INTRO_PATH, "intro"), (config.OUTRO_PATH, "outro")]:
-        if os.path.exists(path):
-            result = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                 "-of", "csv=p=0", path],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                dur = float(result.stdout.strip())
-                if name == "intro":
-                    intro_dur = dur
-                else:
-                    outro_dur = dur
 
-    return {"intro": intro_dur, "outro": outro_dur}
+def get_bumper_durations(intro_path: str = None, outro_path: str = None) -> dict:
+    """Return validated intro/outro durations, failing early on missing assets."""
+    intro_path = intro_path or config.INTRO_PATH
+    outro_path = outro_path or config.OUTRO_PATH
+    return {
+        "intro": _probe_duration(intro_path, "intro"),
+        "outro": _probe_duration(outro_path, "outro"),
+    }

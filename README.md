@@ -6,7 +6,7 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 
 ## Features
 
-- **Two input methods:** YouTube URL or direct video/audio file upload (up to 2 GB)
+- **Two input methods:** YouTube URL or direct video/audio file upload (5 GB by default)
 - **Human review editor** with a waveform, clickable transcript, and exact sermon/teaser markers
 - **Two-stage workflow:** analyze once, review selections, then render without downloading or transcribing again
 - **Intelligent sermon boundary detection** using Claude API with word-level timestamp refinement
@@ -16,13 +16,13 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 - **Duration fitting** to any target length:
   - Trims long pauses (configurable threshold)
   - Expands short pauses if sermon needs to be longer
-  - Tempo adjustment (±7%) without pitch change
+  - Tempo adjustment (up to 8% faster or 7% slower) without pitch change
 - **Two bumper variants** (selectable independently or together):
-  - **Dynamic teaser:** Claude selects a compelling 13-20 second clip from the sermon, extracted and mixed into the intro
+  - **Dynamic teaser:** Claude selects a compelling 12-22 second clip from the sermon, extracted and mixed into the intro
   - **Stock teaser:** Pre-mixed evergreen intro file used as-is
-  - Auto-fallback: if dynamic teaser fails, automatically produces stock variant
-- **Cloud transcription** via OpenAI Whisper API (Opus encoding for timestamp accuracy)
-- **Production deployment** as a systemd service with automatic cleanup
+  - Stock mode is enabled only when `assets/intro_stock.mp3` is installed
+- **Selectable transcription:** OpenAI Whisper API, a local HTTP service, or faster-whisper
+- **Production deployment** with single-worker Gunicorn and systemd
 
 ## Architecture
 
@@ -32,11 +32,11 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 └──────┬──────┘
        │
 ┌──────▼──────────┐
-│   Orchestrator  │  pipeline/orchestrator.py — coordinates all stages
+│ Review Workflow │  pipeline/review_workflow.py — analysis, review, render
 └──────┬──────────┘
        │
        ├─ downloader.py        (YouTube via yt-dlp, or local file conversion)
-       ├─ transcriber_cloud.py (OpenAI Whisper API)
+       ├─ transcription.py     (OpenAI, local HTTP, or faster-whisper)
        ├─ boundary_detector.py (Claude API + word-level refinement)
        ├─ audio_processor.py   (silence detection, trim/expand, tempo)
        ├─ teaser_selector.py   (Claude API + verbatim text matching)
@@ -57,14 +57,14 @@ Analysis artifacts are stored under `state/review_jobs/<job_id>/` so a review ca
 
 ### Prerequisites
 
-- Python 3.10+
-- ffmpeg with libopus, libmp3lame, librubberband
-- yt-dlp (system or pip-installed)
+- Python 3.11+
+- ffmpeg/ffprobe with libopus and libmp3lame
+- The Python dependencies from `requirements.txt` (including yt-dlp)
 
 ### Installation
 
 ```bash
-git clone https://github.com/<your-username>/sermon-broadcaster.git
+git clone https://github.com/larryherzogjr/sermon-broadcaster.git
 cd sermon-broadcaster
 
 # Create virtual environment
@@ -72,18 +72,18 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Create .env with API keys
-cat > .env << EOF
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-TRANSCRIBER=cloud
-EOF
+# Create .env with API keys and backend configuration
+cp .env.example .env
+# Edit .env before starting the app.
 
 # Add your bumper files to assets/
 # - assets/intro.mp3      (intro music with pre-ducked teaser window)
 # - assets/outro.mp3      (outro bumper)
 # - assets/intro_stock.mp3 (optional: pre-mixed stock teaser intro)
 ```
+
+When both bumper variants are requested, their intro-plus-outro durations must
+match so both finished files can satisfy the same broadcast target.
 
 ### Run locally
 
@@ -92,7 +92,25 @@ python app.py
 # Browse to http://localhost:5003
 ```
 
+The app performs processing preflight before accepting a job. Missing binaries,
+API credentials, or selected bumper files are reported immediately. Runtime
+readiness is also available at `GET /api/health`.
+
+### Validation
+
+```bash
+pip install -r requirements-dev.txt
+make check
+```
+
+`make check` compiles the Python sources and runs the pytest suite. The same
+command runs in GitHub Actions.
+
 ### Production deployment (systemd)
+
+Review `User`, `WorkingDirectory`, and `EnvironmentFile` in
+`sermon-broadcaster.service` before installing it; the checked-in values target
+the current `/opt/sermon-broadcaster` deployment.
 
 ```bash
 sudo cp sermon-broadcaster.service /etc/systemd/system/
@@ -100,6 +118,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable sermon-broadcaster
 sudo systemctl start sermon-broadcaster
 ```
+
+The supplied unit runs one Gunicorn worker with multiple request threads. Keep
+it at one worker: processing currently uses in-process background threads and
+SQLite job reconciliation. Place an authenticating reverse proxy in front of
+the app before exposing it outside a trusted private network.
 
 ### Periodic cleanup (cron)
 
@@ -125,13 +148,16 @@ All tunable parameters live in `config.py`:
 | `MAX_SLOWDOWN` | `0.93` | Maximum tempo slowdown (7%) |
 | `MAX_PAUSE_DURATION_MS` | `1500` | Trim pauses longer than this |
 | `OUTPUT_BITRATE` | `128k` | Final MP3 bitrate |
+| `MAX_UPLOAD_GB` | `5` | Maximum request/upload size |
+| `APP_HOST` / `APP_PORT` | `0.0.0.0` / `5003` | Local server bind address |
 
 ## Output
 
-Files are written to `output/` with timestamps:
-- `sermon_YYYYMMDD_HHMMSS.mp3` — sermon only (no bumpers)
-- `sermon_YYYYMMDD_HHMMSS_dynamic.mp3` — with intro (AI teaser) + outro
-- `sermon_YYYYMMDD_HHMMSS_stock.mp3` — with intro (stock teaser) + outro
+Files are written to `output/` using the timestamp-based job ID:
+
+- `sermon_<job_id>.mp3` — sermon only (no bumpers)
+- `sermon_<job_id>_dynamic.mp3` — with intro (AI teaser) + outro
+- `sermon_<job_id>_stock.mp3` — with intro (stock teaser) + outro
 
 ## Built With
 

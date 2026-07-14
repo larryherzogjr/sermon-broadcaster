@@ -6,7 +6,6 @@ to hit the exact target duration.
 import os
 import logging
 import subprocess
-import tempfile
 
 import numpy as np
 import soundfile as sf
@@ -429,8 +428,7 @@ def adjust_tempo(audio_path: str, factor: float, output_path: str) -> str:
 
 def get_audio_duration(audio_path: str) -> float:
     """Get duration of audio file in seconds."""
-    data, sr = sf.read(audio_path)
-    return len(data) / sr
+    return float(sf.info(audio_path).duration)
 
 
 def encode_final(audio_path: str, output_path: str) -> str:
@@ -515,8 +513,9 @@ def fit_to_duration(sermon_audio_path: str, target_duration_str: str,
         # Too short — expand silences first
         time_needed = abs(delta)
         expanded_path = sermon_audio_path.replace(".wav", "_expanded.wav")
-        _, time_added = expand_silences(working_path, pauses, time_needed, expanded_path)
-        working_path = expanded_path
+        working_path, time_added = expand_silences(
+            working_path, pauses, time_needed, expanded_path
+        )
         processing_log["silence_adjustment"] = time_added
         _diag_check(working_path, "after_expand", status_callback)
 

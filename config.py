@@ -14,7 +14,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # claude-sonnet-5 is the replacement. The boundary call disables thinking
 # (see boundary_detector.py) because Sonnet 5 enables adaptive thinking by
 # default, which would put a thinking block first in response.content.
-CLAUDE_MODEL_BOUNDARY = os.getenv("CLAUDE_MODEL_BOUNDARY", "claude-sonnet-5")
+_legacy_claude_model = os.getenv("CLAUDE_MODEL", "").strip()
+CLAUDE_MODEL_BOUNDARY = os.getenv(
+    "CLAUDE_MODEL_BOUNDARY", _legacy_claude_model or "claude-sonnet-5"
+)
 CLAUDE_MODEL_TEASER = os.getenv("CLAUDE_MODEL_TEASER", "claude-opus-4-8")
 
 # Legacy fallback — if old code references CLAUDE_MODEL, use boundary model
@@ -46,11 +49,12 @@ WHISPER_LOCAL_DEBUG_DIR = os.getenv("WHISPER_LOCAL_DEBUG_DIR", "")
 
 # faster-whisper settings (only used when TRANSCRIBE_BACKEND=faster-whisper)
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "medium")
-WHISPER_DEVICE = "cpu"
-WHISPER_COMPUTE_TYPE = "int8"  # int8 is fastest on CPU
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 
 # OpenAI API (only used when TRANSCRIBE_BACKEND=openai)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_TRANSCRIPTION_TIMEOUT = int(os.getenv("OPENAI_TRANSCRIPTION_TIMEOUT", "900"))
 
 # ── YouTube download (yt-dlp) ─────────────────────────────────────────
 # Optional path to a Netscape-format cookies.txt exported from a logged-in
@@ -67,11 +71,17 @@ YTDLP_PLAYER_CLIENTS = os.getenv("YTDLP_PLAYER_CLIENTS", "tv,web_safari,ios,andr
 YTDLP_MAX_ATTEMPTS = int(os.getenv("YTDLP_MAX_ATTEMPTS", "3"))
 
 # Audio defaults
-DEFAULT_TARGET_DURATION = "27:18"          # Sermon-only target (no bumpers)
-DEFAULT_BROADCAST_DURATION = "29:30"       # Full broadcast target (with bumpers)
+DEFAULT_TARGET_DURATION = os.getenv("DEFAULT_TARGET_DURATION", "27:18")
+DEFAULT_BROADCAST_DURATION = os.getenv("DEFAULT_BROADCAST_DURATION", "29:30")
 OUTPUT_FORMAT = "mp3"
 OUTPUT_BITRATE = "128k"
 OUTPUT_SAMPLE_RATE = 44100
+
+# Web server. The app is intended for a trusted private network unless an
+# authenticating reverse proxy is placed in front of it.
+APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
+APP_PORT = int(os.getenv("APP_PORT", "5003"))
+MAX_UPLOAD_GB = int(os.getenv("MAX_UPLOAD_GB", "5"))
 
 # Bumper paths
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")

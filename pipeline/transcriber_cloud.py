@@ -5,8 +5,9 @@ Alternative to local faster-whisper — faster, costs ~$0.50/sermon.
 import os
 import math
 import logging
-import json
 import requests
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,11 @@ def transcribe(audio_path: str, status_callback=None) -> dict:
         upload_path = compressed2
         new_size = os.path.getsize(upload_path) / (1024 * 1024)
         logger.info(f"Re-compressed to {new_size:.1f} MB")
+        if new_size > 24:
+            raise RuntimeError(
+                f"Compressed transcription upload is still {new_size:.1f} MB; "
+                "split the source or use the local transcription backend."
+            )
 
     if status_callback:
         status_callback("Transcribing via OpenAI (typically 3-5 minutes)...")
@@ -90,6 +96,7 @@ def transcribe(audio_path: str, status_callback=None) -> dict:
                 ("timestamp_granularities[]", "word"),
                 ("timestamp_granularities[]", "segment"),
             ],
+            timeout=config.OPENAI_TRANSCRIPTION_TIMEOUT,
         )
 
     if response.status_code != 200:

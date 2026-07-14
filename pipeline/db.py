@@ -182,6 +182,31 @@ def update_metadata(job_id, updates):
         )
 
 
+def claim_render(job_id, review):
+    """Atomically persist confirmed markers and claim a job for rendering."""
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT status, metadata_json FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if not row or row["status"] != "awaiting_review":
+                conn.execute("ROLLBACK")
+                return False
+            metadata = _load_metadata_value(row["metadata_json"])
+            metadata["review"] = review
+            conn.execute(
+                "UPDATE jobs SET status='rendering', error=NULL, metadata_json=? "
+                "WHERE id=?",
+                (json.dumps(metadata, default=str), job_id),
+            )
+            conn.execute("COMMIT")
+            return True
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
 def set_result(job_id, outputs, metadata):
     with _connect() as conn:
         existing = conn.execute(
@@ -294,6 +319,7 @@ def _row_to_job_dict(conn, row):
             "timing": meta.get("timing"),
             "transcript_summary": meta.get("transcript_summary"),
             "broadcast_duration": meta.get("broadcast_duration"),
+            "output_durations": meta.get("output_durations"),
             "include_bumpers": meta.get("include_bumpers"),
             "teaser": meta.get("teaser"),
         }

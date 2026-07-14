@@ -157,8 +157,8 @@
                     <span><strong>Radio broadcast with my teaser</strong><small>Intro + selected teaser + sermon + outro</small></span>
                 </label>
                 <label class="choice">
-                    <input type="checkbox" id="stockCheckbox">
-                    <span><strong>Also create the stock-teaser version</strong><small>Uses the existing pre-mixed intro</small></span>
+                    <input type="checkbox" id="stockCheckbox" {% if not stock_available %}disabled{% endif %}>
+                    <span><strong>Also create the stock-teaser version</strong><small>{% if stock_available %}Uses the existing pre-mixed intro{% else %}Unavailable until assets/intro_stock.mp3 is installed{% endif %}</small></span>
                 </label>
                 <label class="choice">
                     <input type="checkbox" id="sermonOnlyCheckbox">

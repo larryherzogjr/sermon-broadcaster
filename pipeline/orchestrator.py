@@ -59,8 +59,8 @@ def _parse_target(duration_str: str) -> float:
     return 0
 
 
-def _select_content_combination(boundaries: dict, sermon_target: float,
-                                status_callback=None) -> dict:
+def select_content_combination(boundaries: dict, sermon_target: float,
+                               status_callback=None) -> dict:
     """
     Select start/end boundaries based on Larry's content priority hierarchy:
 
@@ -187,6 +187,10 @@ def _select_content_combination(boundaries: dict, sermon_target: float,
             f"({chosen['label']}, may overshoot target)"
         )
     return chosen
+
+
+# Backward-compatible name for older callers.
+_select_content_combination = select_content_combination
 
 # Transcription goes through the normalizing dispatcher, which selects the
 # backend via config.TRANSCRIBE_BACKEND (openai | local | faster-whisper) and
@@ -390,7 +394,7 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
 
         # Choose which content combination to use (skip if sermon_only — already set)
         if not sermon_only and "sermon_end_with_prayer" in boundaries:
-            selection = _select_content_combination(
+            selection = select_content_combination(
                 boundaries, sermon_target_seconds, status_callback,
             )
             boundaries["sermon_start"] = selection["start"]

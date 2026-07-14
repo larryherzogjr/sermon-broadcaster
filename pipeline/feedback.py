@@ -14,10 +14,13 @@ from anthropic import Anthropic
 
 import config
 from pipeline import db
+from pipeline.review_workflow import load_transcript
 
 logger = logging.getLogger(__name__)
 
 SUMMARY_MARKER = "---SUMMARY---"
+MAX_ISSUE_TRANSCRIPT_CHARS = 20000
+MAX_GITHUB_ISSUE_BODY_CHARS = 60000
 
 
 def _fmt_sec(seconds):
@@ -338,10 +341,29 @@ def _build_issue_body(job, messages, summary, severity):
         out.append(f"- [{msg.get('time', '')}] {msg.get('text', '')}\n")
     out.append("\n")
 
-    out.append("## Full Sermon Transcript\n")
-    out.append(transcript.get("full_text") or "(no transcript available)")
+    transcript_text = transcript.get("full_text") or ""
+    if not transcript_text:
+        try:
+            transcript_text = load_transcript(job["job_id"]).get("full_text", "")
+        except (OSError, ValueError, TypeError):
+            transcript_text = ""
+    out.append("## Sermon Transcript Excerpt\n")
+    if transcript_text:
+        excerpt = transcript_text[:MAX_ISSUE_TRANSCRIPT_CHARS]
+        out.append(excerpt)
+        if len(transcript_text) > len(excerpt):
+            out.append(
+                f"\n\n_(Transcript truncated after {MAX_ISSUE_TRANSCRIPT_CHARS:,} "
+                "characters to stay within GitHub's issue size limit.)_"
+            )
+    else:
+        out.append("(no transcript available)")
 
-    return "".join(out)
+    body = "".join(out)
+    if len(body) > MAX_GITHUB_ISSUE_BODY_CHARS:
+        note = "\n\n_(Issue body truncated to stay within GitHub's size limit.)_"
+        body = body[:MAX_GITHUB_ISSUE_BODY_CHARS - len(note)] + note
+    return body
 
 
 def submit_to_github(session_id, summary_override=None,
