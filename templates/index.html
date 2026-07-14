@@ -283,6 +283,15 @@
         const sec = tenths ? s.toFixed(1).padStart(4, '0') : String(Math.round(s)).padStart(2, '0');
         return h ? `${h}:${String(m).padStart(2,'0')}:${sec}` : `${m}:${sec}`;
     };
+    async function readJsonResponse(response, label) {
+        const text = await response.text();
+        if (!response.ok) {
+            try { const error = JSON.parse(text); throw new Error(error.error || `${label} could not be loaded.`); }
+            catch (error) { if (error instanceof SyntaxError) throw new Error(`${label} could not be loaded (HTTP ${response.status}).`); throw error; }
+        }
+        try { return JSON.parse(text); }
+        catch (_error) { throw new Error(`${label} contains invalid data. The server must sanitize the transcript before it can be reviewed.`); }
+    }
 
     function setStep(name) {
         const order = ['Source', 'Review', 'Finish']; const active = order.indexOf(name);
@@ -337,7 +346,12 @@
             if (!response.ok) throw new Error(job.error || 'Job not found'); renderLog(job.messages);
             if (job.status === 'awaiting_review') {
                 if (job.error) setStatus('Render needs an adjustment', 'Review', 'error'); else $('statusPanel').classList.add('hidden');
-                await loadEditor(job); return;
+                try { await loadEditor(job); }
+                catch (error) {
+                    setStatus('Editor could not load', 'Needs attention', 'error');
+                    renderLog([...(job.messages || []), {time: '', text: error.message}]);
+                }
+                return;
             }
             if (job.status === 'complete') { showFinished(job); return; }
             if (job.status === 'failed') { setStatus('Analysis failed', 'Error', 'error'); $('statusLog').insertAdjacentHTML('beforeend', `<div class="log-line">${esc(job.error || 'Unknown error')}</div>`); return; }
@@ -360,7 +374,9 @@
         const [transcriptResponse, waveformResponse] = await Promise.all([
             fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/transcript`), fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/waveform`)
         ]);
-        state.transcript = await transcriptResponse.json(); state.waveform = await waveformResponse.json(); renderTranscript(); updateMarkers(); drawWaveform();
+        state.transcript = await readJsonResponse(transcriptResponse, 'Transcript');
+        state.waveform = await readJsonResponse(waveformResponse, 'Waveform');
+        renderTranscript(); updateMarkers(); drawWaveform();
     }
 
     function renderTranscript() {

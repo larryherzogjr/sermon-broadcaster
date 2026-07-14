@@ -3,6 +3,7 @@ Sermon Broadcaster
 Flask app for processing church service videos into broadcast-ready audio.
 """
 import os
+import math
 import logging
 import threading
 from datetime import datetime
@@ -226,9 +227,35 @@ def review_transcript(job_id):
         return jsonify({"error": "Review job not found"}), 404
     try:
         transcript = load_transcript(job_id)
+        # The editor only needs these three fields. Projecting the response also
+        # strips optional Whisper confidence values, which may legally be NaN in
+        # Python but are invalid JSON in browsers (and would break response.json()).
+        segments = []
+        for segment in transcript.get("segments", []):
+            try:
+                start = float(segment["start"])
+                end = float(segment["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(start) or not math.isfinite(end):
+                continue
+            segments.append({
+                "start": start,
+                "end": end,
+                "text": str(segment.get("text") or ""),
+            })
+
+        duration = transcript.get("duration", job["review"].get("audio_duration"))
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            duration = float(job["review"].get("audio_duration") or 0.0)
+        if not math.isfinite(duration):
+            duration = float(job["review"].get("audio_duration") or 0.0)
+
         return jsonify({
-            "segments": transcript.get("segments", []),
-            "duration": transcript.get("duration", job["review"].get("audio_duration")),
+            "segments": segments,
+            "duration": duration,
         })
     except (OSError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 404

@@ -22,6 +22,7 @@ Backend is chosen via config.TRANSCRIBE_BACKEND:
 to it is a true no-op fallback.
 """
 import os
+import math
 import logging
 
 import requests
@@ -163,14 +164,27 @@ def _normalize_local(data: dict) -> dict:
     for seg in data.get("segments", []) or []:
         if seg.get("start") is None or seg.get("end") is None:
             continue
+        try:
+            segment_start = float(seg["start"])
+            segment_end = float(seg["end"])
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(segment_start) or not math.isfinite(segment_end):
+            continue
         seg_out = {
-            "start": float(seg["start"]),
-            "end": float(seg["end"]),
+            "start": segment_start,
+            "end": segment_end,
             "text": (seg.get("text") or "").strip(),
         }
         for key in _SEGMENT_EXTRA_FIELDS:
-            if key in seg and seg[key] is not None:
-                seg_out[key] = seg[key]
+            if key not in seg or seg[key] is None:
+                continue
+            try:
+                value = float(seg[key])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                seg_out[key] = value
         segments.append(seg_out)
 
         for w in seg.get("words", []) or []:
@@ -178,9 +192,16 @@ def _normalize_local(data: dict) -> dict:
             w_end = w.get("end")
             if w_start is None or w_end is None:
                 continue
+            try:
+                w_start = float(w_start)
+                w_end = float(w_end)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(w_start) or not math.isfinite(w_end):
+                continue
             words.append({
-                "start": float(w_start),
-                "end": float(w_end),
+                "start": w_start,
+                "end": w_end,
                 "word": (w.get("word") or "").strip(),
             })
 
