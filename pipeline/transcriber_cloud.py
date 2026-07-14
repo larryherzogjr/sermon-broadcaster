@@ -3,6 +3,7 @@ Module 2b: Cloud Transcription (OpenAI Whisper API)
 Alternative to local faster-whisper — faster, costs ~$0.50/sermon.
 """
 import os
+import math
 import logging
 import json
 import requests
@@ -107,23 +108,43 @@ def transcribe(audio_path: str, status_callback=None) -> dict:
     segments = []
     if "segments" in data:
         for seg in data["segments"]:
+            try:
+                segment_start = float(seg["start"])
+                segment_end = float(seg["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(segment_start) or not math.isfinite(segment_end):
+                continue
             seg_out = {
-                "start": seg["start"],
-                "end": seg["end"],
+                "start": segment_start,
+                "end": segment_end,
                 "text": seg["text"].strip(),
             }
             for key in _SEGMENT_EXTRA_FIELDS:
-                if key in seg and seg[key] is not None:
-                    seg_out[key] = seg[key]
+                if key not in seg or seg[key] is None:
+                    continue
+                try:
+                    value = float(seg[key])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value):
+                    seg_out[key] = value
             segments.append(seg_out)
 
     # Build words list
     words = []
     if "words" in data:
         for w in data["words"]:
+            try:
+                word_start = float(w["start"])
+                word_end = float(w["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(word_start) or not math.isfinite(word_end):
+                continue
             words.append({
-                "start": w["start"],
-                "end": w["end"],
+                "start": word_start,
+                "end": word_end,
                 "word": w["word"].strip(),
             })
 
