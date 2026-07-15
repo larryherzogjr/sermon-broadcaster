@@ -5,5 +5,5 @@ faster-whisper==1.2.1
 anthropic==0.116.0
 python-dotenv==1.2.2
 soundfile==0.14.0
-numpy==2.5.1
+numpy==2.4.6
 requests==2.34.2
