@@ -341,8 +341,7 @@ def get_job(job_id):
 def list_jobs(limit=200):
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM jobs WHERE status IN ('complete','failed','awaiting_review') "
-            "ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [_row_to_job_dict(conn, r) for r in rows]

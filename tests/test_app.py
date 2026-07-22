@@ -39,8 +39,18 @@ def client(app_module):
 
 
 def test_basic_pages_and_health_render(client):
-    assert client.get("/").status_code == 200
-    assert client.get("/history").status_code == 200
+    index = client.get("/")
+    assert index.status_code == 200
+    index_html = index.get_data(as_text=True)
+    assert "localStorage" not in index_html
+    assert "new URLSearchParams(location.search).get('job')" in index_html
+    assert 'id="newSessionLink"' in index_html
+
+    history = client.get("/history")
+    assert history.status_code == 200
+    history_html = history.get_data(as_text=True)
+    assert "View Progress" in history_html
+    assert "View Finished Job" in history_html
     assert client.get("/api/history").status_code == 200
     health = client.get("/api/health")
     assert health.status_code in {200, 503}
@@ -114,6 +124,7 @@ def test_valid_request_is_persisted_and_queued(client, app_module, monkeypatch):
     assert job["status"] == "queued"
     assert job["source_type"] == "youtube"
     assert len(started) == 1
+    assert any(item["job_id"] == job_id for item in client.get("/api/history").get_json())
 
 
 def test_render_claim_is_atomic(app_module):

@@ -38,6 +38,8 @@
         header h1 { margin: 0; color: var(--accent); font: 700 1.35rem ui-monospace, monospace; letter-spacing: .14em; text-transform: uppercase; }
         header p { margin: .3rem 0 0; color: var(--muted); font-style: italic; }
         header a { color: var(--muted); font: .75rem ui-monospace, monospace; text-transform: uppercase; letter-spacing: .09em; text-decoration: none; }
+        header a:hover { color: var(--accent); }
+        .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 1rem; flex-wrap: wrap; }
         .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: .55rem; margin-bottom: 1.25rem; }
         .step { padding: .65rem .8rem; border-top: 3px solid var(--border); color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
         .step.active { border-color: var(--accent); color: var(--accent); }
@@ -130,7 +132,10 @@
             <h1>Sermon Broadcaster</h1>
             <p>Choose the message. We’ll handle the broadcast edit.</p>
         </div>
-        <a href="/history">Job history &rarr;</a>
+        <nav class="header-actions" aria-label="Broadcast actions">
+            <a class="hidden" id="newSessionLink" href="/">New session</a>
+            <a href="/history">Job history &rarr;</a>
+        </nav>
     </header>
 
     <div class="steps" aria-label="Workflow progress">
@@ -333,7 +338,7 @@
                 response = await fetch('/api/analyze', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({url, ...values}) });
             }
             const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Analysis could not be started.');
-            state.jobId = data.job_id; localStorage.setItem('sermonReviewJob', state.jobId); history.replaceState(null, '', `/?job=${encodeURIComponent(state.jobId)}`); pollJob();
+            state.jobId = data.job_id; $('newSessionLink').classList.remove('hidden'); history.replaceState(null, '', `/?job=${encodeURIComponent(state.jobId)}`); pollJob();
         } catch (error) {
             $('sourcePanel').classList.remove('hidden'); $('analyzeBtn').disabled = false; setStatus('Could not start analysis', 'Error', 'error'); $('statusLog').textContent = error.message;
         }
@@ -442,10 +447,10 @@
     function showFinished(job){
         clearTimeout(state.poll); $('sourcePanel').classList.add('hidden'); $('statusPanel').classList.add('hidden'); $('editorPanel').classList.add('hidden'); $('finishPanel').classList.remove('hidden'); setStep('Finish');
         const result=job.result||{}; const processing=result.processing||{}; $('finishMetrics').innerHTML=`<div class="metric"><div class="metric-label">Final broadcast</div><div class="metric-value">${fmt(result.broadcast_duration)}</div></div><div class="metric"><div class="metric-label">Selected sermon</div><div class="metric-value">${fmt(processing.original_duration)}</div></div><div class="metric"><div class="metric-label">Pause adjustment</div><div class="metric-value">${Number(processing.silence_adjustment||0).toFixed(1)}s</div></div><div class="metric"><div class="metric-label">Tempo</div><div class="metric-value">${Number(processing.tempo_factor||1).toFixed(3)}×</div></div>`;
-        const labels={dynamic:'Download broadcast with selected teaser',stock:'Download stock-teaser broadcast','sermon-only':'Download sermon'}; $('downloadButtons').innerHTML=(result.outputs||[]).map(output=>`<a class="download" href="/api/download/${encodeURIComponent(output.filename)}">${esc(labels[output.variant]||'Download MP3')}</a>`).join('')+`<a class="secondary" style="text-align:center;text-decoration:none" href="/feedback/${encodeURIComponent(state.jobId)}">Submit feedback</a>`; localStorage.removeItem('sermonReviewJob');
+        const labels={dynamic:'Download broadcast with selected teaser',stock:'Download stock-teaser broadcast','sermon-only':'Download sermon'}; $('downloadButtons').innerHTML=(result.outputs||[]).map(output=>`<a class="download" href="/api/download/${encodeURIComponent(output.filename)}">${esc(labels[output.variant]||'Download MP3')}</a>`).join('')+`<a class="secondary" style="text-align:center;text-decoration:none" href="/feedback/${encodeURIComponent(state.jobId)}">Submit feedback</a>`;
     }
 
-    (function restore(){ const params=new URLSearchParams(location.search); const saved=params.get('job')||localStorage.getItem('sermonReviewJob'); if(saved){ state.jobId=saved; $('sourcePanel').classList.add('hidden'); setStatus('Restoring job','Loading'); pollJob(); } })();
+    (function restore(){ const jobId=new URLSearchParams(location.search).get('job'); if(jobId){ state.jobId=jobId; $('newSessionLink').classList.remove('hidden'); $('sourcePanel').classList.add('hidden'); setStatus('Restoring job','Loading'); pollJob(); } })();
 </script>
 </body>
 </html>

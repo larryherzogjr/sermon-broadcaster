@@ -440,7 +440,7 @@ def download_file(filename):
 
 @app.route("/api/history")
 def job_history():
-    """Return list of completed/failed jobs, newest first."""
+    """Return all jobs, newest first, so active work can be resumed."""
     return jsonify(db.list_jobs(limit=200))
 
 
