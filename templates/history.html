@@ -108,6 +108,7 @@
         .badge.complete { background: var(--green); color: #fff; }
         .badge.failed   { background: var(--red);   color: #fff; }
         .badge.awaiting_review { background: var(--blue); color: #fff; }
+        .badge.queued, .badge.running, .badge.analyzing, .badge.rendering { background: var(--accent-dim); color: #fff; }
         .badge.feedback-none       { background: var(--surface-raised); color: var(--text-muted); }
         .badge.feedback-in_progress{ background: var(--blue); color: #fff; }
         .badge.feedback-submitted  { background: var(--accent-dim); color: #fff; }
@@ -171,7 +172,7 @@
     <div class="container">
         <header>
             <h1>Job History</h1>
-            <a href="/">&larr; Back to Broadcaster</a>
+            <a href="/">+ Start New Broadcast</a>
         </header>
 
         <div id="list">
@@ -221,16 +222,21 @@
                 return `<span class="btn btn-download disabled" title="File expired or removed">${escHtml(label)} (expired)</span>`;
             }).join('');
 
-            let feedbackBtn = '';
+            let jobAction = '';
             if (job.status === 'awaiting_review') {
-                feedbackBtn = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">Continue Review</a>`;
+                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">Continue Review</a>`;
+            } else if (['queued', 'running', 'analyzing', 'rendering'].includes(job.status)) {
+                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">View Progress</a>`;
+            } else if (job.status === 'failed') {
+                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">View Details</a>`;
             } else if (job.status === 'complete') {
+                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">View Finished Job</a>`;
                 if (fb.status === 'none') {
-                    feedbackBtn = `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Submit Feedback</a>`;
+                    jobAction += `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Submit Feedback</a>`;
                 } else if (fb.status === 'in_progress') {
-                    feedbackBtn = `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Continue Feedback</a>`;
+                    jobAction += `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Continue Feedback</a>`;
                 } else if (fb.status === 'submitted' && fb.issue_url) {
-                    feedbackBtn = `<a class="btn btn-feedback submitted" href="${escHtml(fb.issue_url)}" target="_blank" rel="noopener">View Issue &rarr;</a>`;
+                    jobAction += `<a class="btn btn-feedback submitted" href="${escHtml(fb.issue_url)}" target="_blank" rel="noopener">View Issue &rarr;</a>`;
                 }
             }
 
@@ -249,7 +255,7 @@
                     </div>
                     <div class="actions">
                         ${downloadHtml}
-                        ${feedbackBtn}
+                        ${jobAction}
                     </div>
                 </div>
             `;
