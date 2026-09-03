@@ -141,15 +141,17 @@ def sermon_target_seconds(target_duration: str, include_dynamic: bool,
     return sermon_target, bumper_durations
 
 
-def _initial_boundaries(transcript_data: dict, sermon_only: bool,
-                        sermon_target: float, status_callback=None) -> dict:
-    if sermon_only:
-        full_duration = float(transcript_data.get("duration") or 0.0)
+def _initial_boundaries(transcript_data: dict, use_full_source: bool,
+                        sermon_target: float, audio_duration: float,
+                        status_callback=None) -> dict:
+    if use_full_source:
         return {
             "sermon_start": 0.0,
-            "sermon_end": full_duration,
+            # The decoded WAV is the file the editor and renderer actually use.
+            # Transcriber duration can drift beyond it by a fraction of a second.
+            "sermon_end": float(audio_duration),
             "confidence": "manual",
-            "sermon_title_guess": "Uploaded sermon",
+            "sermon_title_guess": "Manual sermon selection",
         }
 
     boundaries = detect_boundaries(transcript_data, status_callback)
@@ -165,7 +167,8 @@ def _initial_boundaries(transcript_data: dict, sermon_only: bool,
 
 def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
                 target_duration: str, include_dynamic: bool, include_stock: bool,
-                sermon_only: bool, status_callback=None) -> dict:
+                sermon_only: bool, manual_selection: bool = False,
+                status_callback=None) -> dict:
     """Prepare and persist everything required by the review editor."""
     started = time.time()
     artifact_dir = review_job_dir(job_id)
@@ -210,11 +213,12 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
         target_duration, include_dynamic, include_stock
     )
     boundaries = _initial_boundaries(
-        transcript_data, sermon_only, target_seconds, status_callback
+        transcript_data, sermon_only or manual_selection, target_seconds,
+        float(waveform["duration"]), status_callback
     )
 
     teaser = None
-    if include_dynamic:
+    if include_dynamic and not manual_selection:
         try:
             teaser = select_teaser(
                 transcript_data,
@@ -235,6 +239,7 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
         "include_dynamic": bool(include_dynamic),
         "include_stock": bool(include_stock),
         "sermon_only": bool(sermon_only),
+        "manual_selection": bool(manual_selection),
         "teaser_window_seconds": config.TEASER_WINDOW_END - config.TEASER_WINDOW_START,
         "suggested_sermon_start": float(boundaries["sermon_start"]),
         "suggested_sermon_end": float(boundaries["sermon_end"]),
@@ -297,7 +302,16 @@ def build_preflight(review: dict, selections: dict) -> dict:
     start = selections["sermon_start"]
     end = selections["sermon_end"]
     audio_duration = float(review.get("audio_duration") or 0.0)
-    if start < 0 or end <= start or end > audio_duration + 0.5:
+    # Media containers and browser decoders can disagree by a few frames at
+    # either edge. Treat an endpoint within one second of the decoded WAV edge
+    # as that exact edge instead of making the user nudge valid full-file edits.
+    if abs(start) <= 0.01:
+        start = 0.0
+    if abs(end - audio_duration) <= 1.0:
+        end = audio_duration
+    selections["sermon_start"] = start
+    selections["sermon_end"] = end
+    if start < 0 or end <= start or end > audio_duration:
         raise ValueError("Sermon start and end markers are outside the source audio")
 
     selected_duration = end - start

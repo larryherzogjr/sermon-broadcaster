@@ -49,6 +49,43 @@ def test_preflight_accepts_exact_target():
     assert result["difference_seconds"] == 0.0
 
 
+def test_manual_full_source_uses_decoded_audio_duration():
+    boundaries = review_workflow._initial_boundaries(
+        {"duration": 1800.8}, True, 1800.0, 1800.0
+    )
+
+    assert boundaries["sermon_start"] == 0.0
+    assert boundaries["sermon_end"] == 1800.0
+
+
+def test_preflight_snaps_small_end_drift_to_audio_boundary():
+    review = {
+        "audio_duration": 1800.0,
+        "sermon_target_seconds": 1800.0,
+        "include_dynamic": False,
+    }
+
+    result = review_workflow.build_preflight(
+        review, {"sermon_start": 0.0, "sermon_end": 1800.7}
+    )
+
+    assert result["ready"] is True
+    assert result["selections"]["sermon_end"] == 1800.0
+
+
+def test_preflight_still_rejects_materially_out_of_bounds_end():
+    review = {
+        "audio_duration": 1800.0,
+        "sermon_target_seconds": 1800.0,
+        "include_dynamic": False,
+    }
+
+    with pytest.raises(ValueError, match="outside the source audio"):
+        review_workflow.build_preflight(
+            review, {"sermon_start": 0.0, "sermon_end": 1801.1}
+        )
+
+
 def test_sermon_target_uses_selected_stock_intro(monkeypatch):
     def fake_durations(intro_path=None, outro_path=None):
         if intro_path and intro_path.endswith("intro_stock.mp3"):

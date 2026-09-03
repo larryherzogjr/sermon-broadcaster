@@ -83,7 +83,8 @@ def _is_youtube_url(value):
 
 
 def _validate_processing_requirements(target_duration, include_dynamic,
-                                      include_stock, sermon_only):
+                                      include_stock, sermon_only,
+                                      manual_selection=False):
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed or is not available on PATH")
 
@@ -92,7 +93,9 @@ def _validate_processing_requirements(target_duration, include_dynamic,
         raise RuntimeError("OPENAI_API_KEY is required for the OpenAI transcription backend")
     if backend == "local" and not config.WHISPER_LOCAL_URL:
         raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
-    if (not sermon_only or include_dynamic) and not config.ANTHROPIC_API_KEY:
+    needs_automatic_analysis = not sermon_only and not manual_selection
+    needs_automatic_teaser = include_dynamic and not manual_selection
+    if (needs_automatic_analysis or needs_automatic_teaser) and not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is required for sermon or teaser analysis")
 
     # This also validates ffprobe, required bumper files, their durations, and
@@ -107,7 +110,7 @@ class Job:
 
     def __init__(self, job_id, target_duration, source, source_type,
                  include_bumpers_dynamic=False, include_bumpers_stock=False,
-                 sermon_only=False,
+                 sermon_only=False, manual_selection=False,
                  youtube_url=None, local_file=None):
         self.job_id = job_id
         self.youtube_url = youtube_url
@@ -116,6 +119,7 @@ class Job:
         self.include_bumpers_dynamic = include_bumpers_dynamic
         self.include_bumpers_stock = include_bumpers_stock
         self.sermon_only = sermon_only
+        self.manual_selection = manual_selection
 
         db.create_job(
             job_id=job_id,
@@ -151,10 +155,14 @@ def _run_analysis(job: Job):
             include_dynamic=job.include_bumpers_dynamic,
             include_stock=job.include_bumpers_stock,
             sermon_only=job.sermon_only,
+            manual_selection=job.manual_selection,
             status_callback=job.update_status,
         )
         db.set_analysis_ready(job.job_id, metadata)
-        job.update_status("Analysis complete. Review the sermon and teaser selections.")
+        if job.manual_selection:
+            job.update_status("Audio is ready. Choose the sermon and teaser markers in the editor.")
+        else:
+            job.update_status("Analysis complete. Review the sermon and teaser selections.")
     except Exception as e:
         job.set_error(str(e))
         logger.exception(f"Analysis for job {job.job_id} failed")
@@ -231,6 +239,7 @@ def start_processing():
             include_dynamic = _as_bool(request.form.get("include_bumpers_dynamic"), True)
             include_stock = _as_bool(request.form.get("include_bumpers_stock"), False)
             sermon_only = _as_bool(request.form.get("sermon_only"), False)
+            manual_selection = _as_bool(request.form.get("manual_selection"), False)
             target_value = request.form.get("target_duration")
         else:
             data = request.get_json(silent=True) or {}
@@ -240,6 +249,7 @@ def start_processing():
             include_dynamic = _as_bool(data.get("include_bumpers_dynamic"), True)
             include_stock = _as_bool(data.get("include_bumpers_stock"), False)
             sermon_only = _as_bool(data.get("sermon_only"), False)
+            manual_selection = _as_bool(data.get("manual_selection"), False)
             if _as_bool(data.get("include_bumpers"), False) and not (include_dynamic or include_stock):
                 include_dynamic = True
             target_value = data.get("target_duration")
@@ -264,7 +274,8 @@ def start_processing():
     try:
         parse_duration(target_duration)
         _validate_processing_requirements(
-            target_duration, include_dynamic, include_stock, sermon_only
+            target_duration, include_dynamic, include_stock, sermon_only,
+            manual_selection,
         )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -286,6 +297,7 @@ def start_processing():
               include_bumpers_dynamic=include_dynamic,
               include_bumpers_stock=include_stock,
               sermon_only=sermon_only,
+              manual_selection=manual_selection,
               youtube_url=None if local_file else youtube_url,
               local_file=local_file)
 

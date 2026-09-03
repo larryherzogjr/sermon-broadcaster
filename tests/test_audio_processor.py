@@ -32,3 +32,13 @@ def test_get_audio_duration_uses_file_metadata(tmp_path):
     sf.write(source, np.zeros(24000), 48000, subtype="PCM_16")
 
     assert audio_processor.get_audio_duration(str(source)) == 0.5
+
+
+def test_extract_segment_clamps_end_to_decoded_audio_boundary(tmp_path):
+    source = tmp_path / "source.wav"
+    output = tmp_path / "selection.wav"
+    sf.write(source, np.full(48000, 0.25), 48000, subtype="PCM_16")
+
+    audio_processor.extract_segment(str(source), 0.0, 1.01, str(output))
+
+    assert sf.info(output).frames == 48000

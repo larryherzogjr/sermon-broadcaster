@@ -62,6 +62,14 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str)
     # Read the full audio to get sample rate
     info = sf.info(audio_path)
     sr = info.samplerate
+    source_duration = info.frames / sr
+
+    # The UI may receive a container duration that differs from the decoded
+    # frame count by a few milliseconds. Clamp edge selections to real samples.
+    start = max(0.0, min(float(start), source_duration))
+    end = max(start, min(float(end), source_duration))
+    if end <= start:
+        raise ValueError("The selected audio range is empty or outside the source audio")
 
     # Pad start by 500ms to avoid clipping into the first word
     pre_roll = 0.5
@@ -69,7 +77,7 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str)
 
     # Calculate sample positions
     start_sample = int(padded_start * sr)
-    end_sample = int(end * sr)
+    end_sample = min(info.frames, int(round(end * sr)))
 
     # Read just the segment we need
     data, sr = sf.read(audio_path, start=start_sample, stop=end_sample, dtype='float64')

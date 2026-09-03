@@ -45,6 +45,8 @@ def test_basic_pages_and_health_render(client):
     assert "localStorage" not in index_html
     assert "new URLSearchParams(location.search).get('job')" in index_html
     assert 'id="newSessionLink"' in index_html
+    assert 'id="manualSelectionCheckbox"' in index_html
+    assert "I’ll select the sermon manually" in index_html
 
     history = client.get("/history")
     assert history.status_code == 200
@@ -72,6 +74,24 @@ def test_youtube_url_validation_rejects_lookalike_hosts(app_module):
 )
 def test_boolean_normalization(app_module, value, expected):
     assert app_module._as_bool(value) is expected
+
+
+def test_manual_selection_does_not_require_anthropic(app_module, monkeypatch):
+    monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(app_module.config, "TRANSCRIBE_BACKEND", "faster-whisper")
+    monkeypatch.setattr(app_module.config, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(
+        app_module, "sermon_target_seconds", lambda *_args: (1638.0, {})
+    )
+
+    app_module._validate_processing_requirements(
+        "27:18", True, False, False, manual_selection=True
+    )
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        app_module._validate_processing_requirements(
+            "27:18", True, False, False, manual_selection=False
+        )
 
 
 def test_invalid_requests_fail_before_processing(client):
@@ -127,6 +147,35 @@ def test_valid_request_is_persisted_and_queued(client, app_module, monkeypatch):
     assert job["source_type"] == "youtube"
     assert len(started) == 1
     assert any(item["job_id"] == job_id for item in client.get("/api/history").get_json())
+
+
+def test_manual_selection_mode_is_forwarded_to_analysis(client, app_module, monkeypatch):
+    started = []
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            self.args = args
+
+        def start(self):
+            started.append(self.args)
+
+    monkeypatch.setattr(app_module, "_validate_processing_requirements", lambda *args: None)
+    monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
+
+    response = client.post(
+        "/api/analyze",
+        json={
+            "url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "target_duration": "27:18",
+            "include_bumpers_dynamic": False,
+            "include_bumpers_stock": False,
+            "sermon_only": False,
+            "manual_selection": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert started[0][0].manual_selection is True
 
 
 def test_render_claim_is_atomic(app_module):
