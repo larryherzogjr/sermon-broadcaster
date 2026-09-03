@@ -346,6 +346,33 @@ def list_jobs(limit=200):
         return [_row_to_job_dict(conn, r) for r in rows]
 
 
+def delete_job(job_id):
+    """Delete one job and every database record owned by it."""
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if not exists:
+                conn.execute("ROLLBACK")
+                return False
+            conn.execute(
+                "DELETE FROM feedback_messages WHERE session_id IN "
+                "(SELECT id FROM feedback_sessions WHERE job_id=?)",
+                (job_id,),
+            )
+            conn.execute("DELETE FROM feedback_sessions WHERE job_id=?", (job_id,))
+            conn.execute("DELETE FROM job_outputs WHERE job_id=?", (job_id,))
+            conn.execute("DELETE FROM job_messages WHERE job_id=?", (job_id,))
+            conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+            conn.execute("COMMIT")
+            return True
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
 # ── Feedback sessions ────────────────────────────────────────────────
 
 def create_feedback_session(job_id):

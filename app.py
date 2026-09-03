@@ -43,6 +43,69 @@ app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_GB * 1024 * 1024 * 1024
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+_cancelled_job_ids = set()
+_cancelled_jobs_lock = threading.Lock()
+
+
+class JobCancelled(RuntimeError):
+    """Raised inside a worker after its job is deleted from history."""
+
+
+def _cancel_job(job_id):
+    with _cancelled_jobs_lock:
+        _cancelled_job_ids.add(job_id)
+
+
+def _job_is_cancelled(job_id):
+    with _cancelled_jobs_lock:
+        return job_id in _cancelled_job_ids
+
+
+def _finish_cancelled_job(job_id):
+    with _cancelled_jobs_lock:
+        _cancelled_job_ids.discard(job_id)
+
+
+def _remove_file(path):
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        logger.warning("Could not remove deleted-job file %s", path, exc_info=True)
+
+
+def _cleanup_job_files(job_id, job=None):
+    """Remove persisted and temporary files belonging to exactly one job id."""
+    try:
+        shutil.rmtree(review_job_dir(job_id), ignore_errors=True)
+    except ValueError:
+        return
+
+    if job and job.get("source_type") == "upload":
+        source_name = os.path.basename(str(job.get("source") or ""))
+        if source_name.startswith(f"{job_id}_"):
+            _remove_file(os.path.join(UPLOAD_DIR, source_name))
+
+    output_names = {
+        f"sermon_{job_id}.mp3",
+        f"sermon_{job_id}_dynamic.mp3",
+        f"sermon_{job_id}_stock.mp3",
+    }
+    for output in ((job or {}).get("result") or {}).get("outputs", []):
+        filename = os.path.basename(str(output.get("filename") or ""))
+        if filename.startswith(f"sermon_{job_id}"):
+            output_names.add(filename)
+    for filename in output_names:
+        _remove_file(os.path.join(config.OUTPUT_DIR, filename))
+
+    work_prefix = f"review_{job_id}_"
+    try:
+        for name in os.listdir(config.WORK_DIR):
+            if name.startswith(work_prefix):
+                shutil.rmtree(os.path.join(config.WORK_DIR, name), ignore_errors=True)
+    except OSError:
+        pass
+
 # Persistence: schema + reconcile orphaned jobs from a prior crash/restart.
 # Runs at import time so it executes under systemd too.
 db.init_schema()
@@ -140,6 +203,8 @@ class Job:
         )
 
     def update_status(self, message):
+        if _job_is_cancelled(self.job_id):
+            raise JobCancelled(f"Job {self.job_id} was deleted")
         ts = local_now().strftime("%H:%M:%S")
         db.append_message(self.job_id, ts, message)
         logger.info(f"[Job {self.job_id}] {message}")
@@ -167,14 +232,26 @@ def _run_analysis(job: Job):
             manual_teaser=job.manual_teaser,
             status_callback=job.update_status,
         )
+        if _job_is_cancelled(job.job_id):
+            raise JobCancelled(f"Job {job.job_id} was deleted")
         db.set_analysis_ready(job.job_id, metadata)
         if job.manual_selection:
             job.update_status("Audio is ready. Edit the sermon and choose any teaser options in the editor.")
         else:
             job.update_status("Analysis complete. Review the sermon and teaser selections.")
+    except JobCancelled:
+        logger.info("Analysis for deleted job %s was cancelled", job.job_id)
     except Exception as e:
-        job.set_error(str(e))
-        logger.exception(f"Analysis for job {job.job_id} failed")
+        if not _job_is_cancelled(job.job_id):
+            job.set_error(str(e))
+            logger.exception(f"Analysis for job {job.job_id} failed")
+    finally:
+        if _job_is_cancelled(job.job_id):
+            _cleanup_job_files(job.job_id, {
+                "source": os.path.basename(job.local_file) if job.local_file else "",
+                "source_type": "upload" if job.local_file else "youtube",
+            })
+            _finish_cancelled_job(job.job_id)
 
 
 def _run_render(job_id: str, selections: dict):
@@ -186,15 +263,26 @@ def _run_render(job_id: str, selections: dict):
         db.set_status(job_id, "rendering")
 
         def update(message):
+            if _job_is_cancelled(job_id):
+                raise JobCancelled(f"Job {job_id} was deleted")
             ts = local_now().strftime("%H:%M:%S")
             db.append_message(job_id, ts, message)
             logger.info(f"[Job {job_id}] {message}")
 
         result = render_job(job_id, metadata, selections, status_callback=update)
+        if _job_is_cancelled(job_id):
+            raise JobCancelled(f"Job {job_id} was deleted")
         db.set_result(job_id, result.pop("outputs", []), result)
+    except JobCancelled:
+        logger.info("Render for deleted job %s was cancelled", job_id)
     except Exception as e:
-        db.set_review_error(job_id, str(e))
-        logger.exception(f"Render for job {job_id} failed")
+        if not _job_is_cancelled(job_id):
+            db.set_review_error(job_id, str(e))
+            logger.exception(f"Render for job {job_id} failed")
+    finally:
+        if _job_is_cancelled(job_id):
+            _cleanup_job_files(job_id)
+            _finish_cancelled_job(job_id)
 
 
 # ── Routes ───────────────────────────────────────────────────────────
@@ -509,6 +597,22 @@ def download_file(filename):
 def job_history():
     """Return all jobs, newest first, so active work can be resumed."""
     return jsonify(db.list_jobs(limit=200))
+
+
+@app.route("/api/jobs/<job_id>", methods=["DELETE"])
+def delete_job(job_id):
+    """Abandon a job and remove its database records and generated files."""
+    job = db.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job["status"] in {"queued", "running", "analyzing", "rendering"}:
+        _cancel_job(job_id)
+    if not db.delete_job(job_id):
+        return jsonify({"error": "Job not found"}), 404
+    _cleanup_job_files(job_id, job)
+    logger.info("Deleted job %s and its stored files", job_id)
+    return jsonify({"deleted": True, "job_id": job_id})
 
 
 # ── Feedback routes ──────────────────────────────────────────────────

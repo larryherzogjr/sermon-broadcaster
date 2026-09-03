@@ -58,6 +58,8 @@ def test_basic_pages_and_health_render(client):
     history_html = history.get_data(as_text=True)
     assert "View Progress" in history_html
     assert "View Finished Job" in history_html
+    assert 'data-delete-job=' in history_html
+    assert "This cannot be undone" in history_html
     assert 'const APP_TIME_ZONE = "America/Chicago"' in history_html
     assert "timeZone: APP_TIME_ZONE" in history_html
     assert client.get("/api/history").status_code == 200
@@ -243,3 +245,54 @@ def test_render_claim_is_atomic(app_module):
     assert app_module.db.claim_render(job_id, review) is True
     assert app_module.db.claim_render(job_id, review) is False
     assert app_module.db.get_job(job_id)["status"] == "rendering"
+
+
+def test_delete_job_removes_database_records_and_files(client, app_module):
+    job_id = "20260903_130000_000001"
+    upload_name = f"{job_id}_service.wav"
+    output_name = f"sermon_{job_id}_dynamic.mp3"
+    app_module.db.create_job(
+        job_id, upload_name, "upload", "29:30", True, False, False
+    )
+    app_module.db.set_result(
+        job_id,
+        [{"variant": "dynamic", "filename": output_name, "note": ""}],
+        {"review": {"title": "Delete me"}},
+    )
+    session_id = app_module.db.create_feedback_session(job_id)
+    app_module.db.append_feedback_message(session_id, "user", "test")
+
+    review_dir = os.path.join(app_module.config.REVIEW_DIR, job_id)
+    work_dir = os.path.join(app_module.config.WORK_DIR, f"review_{job_id}_123456")
+    upload_path = os.path.join(app_module.UPLOAD_DIR, upload_name)
+    output_path = os.path.join(app_module.config.OUTPUT_DIR, output_name)
+    os.makedirs(review_dir)
+    os.makedirs(work_dir)
+    for path in (upload_path, output_path, os.path.join(review_dir, "raw_audio.wav")):
+        with open(path, "wb") as handle:
+            handle.write(b"fixture")
+
+    response = client.delete(f"/api/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] is True
+    assert app_module.db.get_job(job_id) is None
+    assert app_module.db.get_feedback_session(session_id) is None
+    assert not os.path.exists(review_dir)
+    assert not os.path.exists(work_dir)
+    assert not os.path.exists(upload_path)
+    assert not os.path.exists(output_path)
+
+
+def test_delete_active_job_marks_worker_cancelled(client, app_module):
+    job_id = "20260903_130000_000002"
+    app_module.db.create_job(
+        job_id, "https://youtu.be/abcdefghijk", "youtube", "29:30", True, False, False
+    )
+
+    response = client.delete(f"/api/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert app_module._job_is_cancelled(job_id) is True
+    assert app_module.db.get_job(job_id) is None
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 404

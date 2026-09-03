@@ -130,6 +130,8 @@
             letter-spacing: 0.05em;
             text-decoration: none;
             transition: background 0.2s, opacity 0.2s;
+            border: 0;
+            cursor: pointer;
         }
         .btn-download {
             background: var(--green);
@@ -153,6 +155,14 @@
             color: var(--accent);
             border: 1px solid var(--accent-dim);
         }
+        .btn-delete {
+            margin-left: auto;
+            background: transparent;
+            color: #d98080;
+            border: 1px solid var(--red);
+        }
+        .btn-delete:hover { background: var(--red); color: #fff; }
+        .btn-delete:disabled { cursor: wait; opacity: .55; }
 
         .empty {
             text-align: center;
@@ -248,7 +258,7 @@
             }
 
             return `
-                <div class="job-row">
+                <div class="job-row" data-job-row="${escHtml(job.job_id)}">
                     <div class="top">
                         <div>
                             <div class="title">${escHtml(title)}</div>
@@ -263,10 +273,44 @@
                     <div class="actions">
                         ${downloadHtml}
                         ${jobAction}
+                        <button class="btn btn-delete" type="button" data-delete-job="${escHtml(job.job_id)}" data-delete-title="${escHtml(title)}">Delete</button>
                     </div>
                 </div>
             `;
         }
+
+        async function deleteJob(button) {
+            const jobId = button.dataset.deleteJob;
+            const title = button.dataset.deleteTitle || 'this job';
+            const confirmed = window.confirm(
+                `Delete "${title}" (job ${jobId})?\n\n` +
+                'This permanently abandons any processing and removes the session, cached review audio, generated downloads, and local feedback records. This cannot be undone.'
+            );
+            if (!confirmed) return;
+
+            button.disabled = true;
+            button.textContent = 'Deleting…';
+            try {
+                const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {method: 'DELETE'});
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'The job could not be deleted.');
+                const row = button.closest('[data-job-row]');
+                if (row) row.remove();
+                const list = document.getElementById('list');
+                if (!list.querySelector('[data-job-row]')) {
+                    list.innerHTML = '<div class="empty">No jobs yet.</div>';
+                }
+            } catch (error) {
+                button.disabled = false;
+                button.textContent = 'Delete';
+                window.alert(error.message);
+            }
+        }
+
+        document.getElementById('list').addEventListener('click', event => {
+            const button = event.target.closest('[data-delete-job]');
+            if (button) deleteJob(button);
+        });
 
         fetch('/api/history')
             .then(r => r.json())

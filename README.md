@@ -12,6 +12,8 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
   draggable crop markers, repeatable cut-and-join editing, precise time entry,
   scrubbing, and variable-speed playback
 - **Two-stage workflow:** analyze once, review selections, then render without downloading or transcribing again
+- **Job cleanup:** abandon active work or delete completed/failed jobs from history,
+  including their review audio, temporary files, outputs, and local feedback records
 - **Intelligent sermon boundary detection** using Claude API with word-level timestamp refinement
   - Snaps end boundary to "Amen" before liturgical transitions ("let us stand," "stand and sing")
   - Handles both with-prayer and without-prayer endpoints, picks whichever fits best
