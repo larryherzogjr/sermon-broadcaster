@@ -447,7 +447,10 @@
 
     function renderTranscript() {
         const segments = state.transcript?.segments || [];
-        $('transcript').innerHTML = segments.map((segment, index) => `<button class="segment" data-segment="${index}"><span class="time">${fmt(segment.start)}</span><span>${esc(segment.text)}</span></button>`).join('') || '<div class="muted" style="padding:1rem">No transcript segments were returned.</div>';
+        const emptyMessage = state.review?.manual_selection
+            ? 'Manual mode skips transcription. Use the waveform and audio controls above to find the sermon.'
+            : 'No transcript segments were returned.';
+        $('transcript').innerHTML = segments.map((segment, index) => `<button class="segment" data-segment="${index}"><span class="time">${fmt(segment.start)}</span><span>${esc(segment.text)}</span></button>`).join('') || `<div class="muted" style="padding:1rem">${emptyMessage}</div>`;
         $('transcript').onclick = event => { const button = event.target.closest('[data-segment]'); if (!button) return; const segment = segments[Number(button.dataset.segment)]; $('sourceAudio').currentTime = Number(segment.start); safePlay($('sourceAudio')); };
         highlightTranscript();
     }

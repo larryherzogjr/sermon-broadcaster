@@ -57,7 +57,8 @@ Analysis artifacts are stored under `state/review_jobs/<job_id>/` so a review ca
 Choose **I’ll select the sermon manually** to bypass automatic sermon-boundary
 detection and open the decoded recording at its full range. This mode works for
 YouTube links and uploaded video or audio; if a dynamic teaser is requested, its
-markers are selected manually in the same editor.
+markers are selected manually in the same editor. Manual mode also skips
+transcription, so the editor remains available when the Whisper service is offline.
 
 ## Setup
 

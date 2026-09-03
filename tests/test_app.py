@@ -96,6 +96,25 @@ def test_manual_selection_does_not_require_anthropic(app_module, monkeypatch):
         )
 
 
+def test_manual_selection_does_not_require_transcription_service(app_module, monkeypatch):
+    monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/tool")
+    monkeypatch.setattr(app_module.config, "TRANSCRIBE_BACKEND", "local")
+    monkeypatch.setattr(app_module.config, "WHISPER_LOCAL_URL", "")
+    monkeypatch.setattr(app_module.config, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(
+        app_module, "sermon_target_seconds", lambda *_args: (1638.0, {})
+    )
+
+    app_module._validate_processing_requirements(
+        "27:18", True, False, False, manual_selection=True
+    )
+
+    with pytest.raises(RuntimeError, match="WHISPER_LOCAL_URL"):
+        app_module._validate_processing_requirements(
+            "27:18", True, False, False, manual_selection=False
+        )
+
+
 def test_invalid_requests_fail_before_processing(client):
     assert client.post("/api/analyze", json={}).status_code == 400
     assert client.post("/api/analyze", json=[]).status_code == 400

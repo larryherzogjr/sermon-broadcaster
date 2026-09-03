@@ -188,9 +188,14 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
     else:
         raise ValueError("A YouTube URL or uploaded file is required")
 
-    if status_callback:
-        status_callback("Transcribing audio for the review editor...")
-    transcript_data = transcribe(raw_audio_path, status_callback)
+    if manual_selection:
+        if status_callback:
+            status_callback("Manual selection enabled; skipping transcription.")
+        transcript_data = {"segments": [], "words": [], "full_text": ""}
+    else:
+        if status_callback:
+            status_callback("Transcribing audio for the review editor...")
+        transcript_data = transcribe(raw_audio_path, status_callback)
 
     # Manual markers are chosen while listening to raw_audio.wav, so that same
     # file must be authoritative for teaser preview and final extraction. The
@@ -204,10 +209,12 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
             pass
     teaser_source_name = "raw_audio.wav"
 
-    _write_json(os.path.join(artifact_dir, "transcript.json"), transcript_data)
     if status_callback:
         status_callback("Building the waveform preview...")
     waveform = _generate_waveform(raw_audio_path, os.path.join(artifact_dir, "waveform.json"))
+    if manual_selection:
+        transcript_data["duration"] = float(waveform["duration"])
+    _write_json(os.path.join(artifact_dir, "transcript.json"), transcript_data)
 
     target_seconds, bumpers = sermon_target_seconds(
         target_duration, include_dynamic, include_stock

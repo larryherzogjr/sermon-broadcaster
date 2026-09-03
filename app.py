@@ -88,11 +88,12 @@ def _validate_processing_requirements(target_duration, include_dynamic,
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed or is not available on PATH")
 
-    backend = (config.TRANSCRIBE_BACKEND or "openai").strip().lower()
-    if backend in {"openai", "cloud"} and not config.OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is required for the OpenAI transcription backend")
-    if backend == "local" and not config.WHISPER_LOCAL_URL:
-        raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
+    if not manual_selection:
+        backend = (config.TRANSCRIBE_BACKEND or "openai").strip().lower()
+        if backend in {"openai", "cloud"} and not config.OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is required for the OpenAI transcription backend")
+        if backend == "local" and not config.WHISPER_LOCAL_URL:
+            raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
     needs_automatic_analysis = not sermon_only and not manual_selection
     needs_automatic_teaser = include_dynamic and not manual_selection
     if (needs_automatic_analysis or needs_automatic_teaser) and not config.ANTHROPIC_API_KEY:

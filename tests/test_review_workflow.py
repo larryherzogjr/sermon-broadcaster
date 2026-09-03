@@ -58,6 +58,42 @@ def test_manual_full_source_uses_decoded_audio_duration():
     assert boundaries["sermon_end"] == 1800.0
 
 
+def test_manual_analysis_skips_transcription(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_workflow.config, "REVIEW_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        review_workflow, "download_audio",
+        lambda _url, output_dir, _status: f"{output_dir}/raw_audio.wav",
+    )
+    monkeypatch.setattr(
+        review_workflow, "transcribe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("manual mode must not transcribe")
+        ),
+    )
+    monkeypatch.setattr(
+        review_workflow, "_generate_waveform",
+        lambda *_args, **_kwargs: {"duration": 1800.0, "sample_rate": 48000, "peaks": []},
+    )
+    monkeypatch.setattr(
+        review_workflow, "sermon_target_seconds",
+        lambda *_args, **_kwargs: (1638.0, {"intro": 0.0, "outro": 0.0}),
+    )
+
+    result = review_workflow.analyze_job(
+        "123456",
+        youtube_url="https://www.youtube.com/watch?v=abcdefghijk",
+        target_duration="27:18",
+        include_dynamic=False,
+        include_stock=False,
+        sermon_only=False,
+        manual_selection=True,
+    )
+
+    assert result["review"]["manual_selection"] is True
+    assert result["transcript_summary"]["segment_count"] == 0
+    assert result["transcript_summary"]["word_count"] == 0
+
+
 def test_preflight_snaps_small_end_drift_to_audio_boundary():
     review = {
         "audio_duration": 1800.0,
