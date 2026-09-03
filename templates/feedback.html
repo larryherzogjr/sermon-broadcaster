@@ -315,6 +315,7 @@
     <script>
         const JOB_ID = {{ job_id | tojson }};
         const JOB_TITLE = {{ (((job.get('result') or {}).get('boundaries') or {}).get('sermon_title_guess') or job.get('source') or '') | tojson }};
+        const APP_TIME_ZONE = {{ app_timezone | tojson }};
         let sessionId = null;
         let isSubmitted = false;
 
@@ -330,6 +331,17 @@
             document.getElementById('subTitle').textContent = `job ${JOB_ID}`;
         }
 
+        function fmtDate(iso) {
+            if (!iso) return '';
+            const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(iso) ? iso : `${iso}Z`;
+            const d = new Date(normalized);
+            if (isNaN(d.getTime())) return iso;
+            return d.toLocaleString(undefined, {
+                timeZone: APP_TIME_ZONE,
+                timeZoneName: 'short',
+            });
+        }
+
         function renderConversation(messages) {
             const conv = document.getElementById('conversation');
             conv.innerHTML = '';
@@ -339,7 +351,7 @@
                 div.innerHTML =
                     `<div class="who">${m.role === 'assistant' ? 'Claude' : 'You'}</div>` +
                     `<div>${escHtml(m.content)}</div>` +
-                    (m.ts ? `<div class="ts">${escHtml(m.ts)}</div>` : '');
+                    (m.ts ? `<div class="ts">${escHtml(fmtDate(m.ts))}</div>` : '');
                 conv.appendChild(div);
             });
             window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });

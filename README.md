@@ -150,6 +150,7 @@ All tunable parameters live in `config.py`:
 | `OUTPUT_BITRATE` | `128k` | Final MP3 bitrate |
 | `MAX_UPLOAD_GB` | `5` | Maximum request/upload size |
 | `APP_HOST` / `APP_PORT` | `0.0.0.0` / `5003` | Local server bind address |
+| `APP_TIMEZONE` | `America/Chicago` | IANA timezone for displayed dates and times (including DST) |
 
 ## Output
 

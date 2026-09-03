@@ -7,7 +7,6 @@ import math
 import logging
 import shutil
 import threading
-from datetime import datetime
 from urllib.parse import urlparse
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
@@ -16,6 +15,7 @@ from werkzeug.utils import secure_filename
 import config
 from pipeline import db
 from pipeline import feedback
+from pipeline.time_utils import local_now
 from pipeline.review_workflow import (
     analyze_job,
     build_preflight,
@@ -128,7 +128,7 @@ class Job:
         )
 
     def update_status(self, message):
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = local_now().strftime("%H:%M:%S")
         db.append_message(self.job_id, ts, message)
         logger.info(f"[Job {self.job_id}] {message}")
 
@@ -169,7 +169,7 @@ def _run_render(job_id: str, selections: dict):
         db.set_status(job_id, "rendering")
 
         def update(message):
-            ts = datetime.now().strftime("%H:%M:%S")
+            ts = local_now().strftime("%H:%M:%S")
             db.append_message(job_id, ts, message)
             logger.info(f"[Job {job_id}] {message}")
 
@@ -269,7 +269,7 @@ def start_processing():
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    job_id = local_now().strftime("%Y%m%d_%H%M%S_%f")
     if has_upload:
         filename = secure_filename(f"{job_id}_{file.filename}")
         local_file = os.path.join(UPLOAD_DIR, filename)
@@ -448,7 +448,7 @@ def job_history():
 
 @app.route("/history")
 def history_page():
-    return render_template("history.html")
+    return render_template("history.html", app_timezone=config.APP_TIMEZONE)
 
 
 @app.route("/feedback/<job_id>")
@@ -456,7 +456,9 @@ def feedback_page(job_id):
     j = db.get_job(job_id)
     if not j:
         return "Job not found", 404
-    return render_template("feedback.html", job_id=job_id, job=j)
+    return render_template(
+        "feedback.html", job_id=job_id, job=j, app_timezone=config.APP_TIMEZONE
+    )
 
 
 @app.route("/api/feedback/<job_id>/start", methods=["POST"])

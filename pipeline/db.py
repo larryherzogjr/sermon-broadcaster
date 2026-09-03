@@ -4,9 +4,8 @@ import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
-
 import config
+from pipeline.time_utils import utc_now_iso
 
 
 SCHEMA = """
@@ -81,7 +80,7 @@ def _connect():
 
 
 def _now():
-    return datetime.now().isoformat(timespec="seconds")
+    return utc_now_iso()
 
 
 def init_schema():

@@ -82,6 +82,9 @@ OUTPUT_SAMPLE_RATE = 44100
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "5003"))
 MAX_UPLOAD_GB = int(os.getenv("MAX_UPLOAD_GB", "5"))
+# IANA timezone used for every user-facing wall-clock timestamp. IANA zones
+# include historical and daylight-saving rules; fixed offsets do not.
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Chicago")
 
 # Bumper paths
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")

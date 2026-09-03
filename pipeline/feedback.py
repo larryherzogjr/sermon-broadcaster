@@ -15,6 +15,7 @@ from anthropic import Anthropic
 import config
 from pipeline import db
 from pipeline.review_workflow import load_transcript
+from pipeline.time_utils import format_local_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +296,7 @@ def _build_issue_body(job, messages, summary, severity):
 
     out.append("## Diagnostic\n\n")
     out.append(f"**Job ID:** {job['job_id']}\n")
-    out.append(f"**Created:** {job.get('created_at', '—')}\n")
+    out.append(f"**Created:** {format_local_timestamp(job.get('created_at'))}\n")
     out.append(f"**Source:** {job.get('source', '—')}\n")
     out.append(f"**Target duration:** {job.get('target_duration', '—')}\n")
     out.append(f"**Status:** {job.get('status', '—')}\n\n")

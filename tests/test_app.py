@@ -51,6 +51,8 @@ def test_basic_pages_and_health_render(client):
     history_html = history.get_data(as_text=True)
     assert "View Progress" in history_html
     assert "View Finished Job" in history_html
+    assert 'const APP_TIME_ZONE = "America/Chicago"' in history_html
+    assert "timeZone: APP_TIME_ZONE" in history_html
     assert client.get("/api/history").status_code == 200
     health = client.get("/api/health")
     assert health.status_code in {200, 503}

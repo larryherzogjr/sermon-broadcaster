@@ -181,6 +181,7 @@
     </div>
 
     <script>
+        const APP_TIME_ZONE = {{ app_timezone | tojson }};
         const VARIANT_LABELS = {
             'dynamic': 'Dynamic Teaser',
             'stock': 'Stock Teaser',
@@ -195,9 +196,15 @@
 
         function fmtDate(iso) {
             if (!iso) return '—';
-            const d = new Date(iso);
+            // Before timestamps carried an explicit offset, production stored
+            // UTC as a timezone-less ISO string. Preserve those existing rows.
+            const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(iso) ? iso : `${iso}Z`;
+            const d = new Date(normalized);
             if (isNaN(d.getTime())) return iso;
-            return d.toLocaleString();
+            return d.toLocaleString(undefined, {
+                timeZone: APP_TIME_ZONE,
+                timeZoneName: 'short',
+            });
         }
 
         function renderRow(job) {
