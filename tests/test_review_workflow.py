@@ -1,4 +1,5 @@
 import math
+import os
 
 import pytest
 
@@ -107,6 +108,150 @@ def test_preflight_snaps_small_end_drift_to_audio_boundary():
 
     assert result["ready"] is True
     assert result["selections"]["sermon_end"] == 1800.0
+
+
+def test_preflight_subtracts_interior_cuts_from_selected_duration():
+    review = {
+        "audio_duration": 2000.0,
+        "sermon_target_seconds": 1600.0,
+        "include_dynamic": False,
+    }
+
+    result = review_workflow.build_preflight(
+        review,
+        {
+            "sermon_start": 100.0,
+            "sermon_end": 1720.0,
+            "cuts": [{"start": 300.0, "end": 320.0}],
+        },
+    )
+
+    assert result["ready"] is True
+    assert result["selected_duration"] == 1600.0
+    assert result["cut_duration"] == 20.0
+
+
+def test_preflight_rejects_overlapping_cuts():
+    review = {
+        "audio_duration": 2000.0,
+        "sermon_target_seconds": 1600.0,
+        "include_dynamic": False,
+    }
+
+    with pytest.raises(ValueError, match="cannot overlap"):
+        review_workflow.build_preflight(
+            review,
+            {
+                "sermon_start": 100.0,
+                "sermon_end": 1700.0,
+                "cuts": [
+                    {"start": 300.0, "end": 330.0},
+                    {"start": 320.0, "end": 340.0},
+                ],
+            },
+        )
+
+
+def test_manual_mode_can_defer_teaser_selection_until_render():
+    review = {
+        "audio_duration": 1700.0,
+        "sermon_target_seconds": 1600.0,
+        "include_dynamic": True,
+        "manual_selection": True,
+        "manual_teaser": False,
+        "teaser_window_seconds": 23.0,
+    }
+
+    result = review_workflow.build_preflight(
+        review, {"sermon_start": 50.0, "sermon_end": 1650.0}
+    )
+
+    assert result["ready"] is True
+    assert result["teaser_duration"] is None
+
+
+def test_manual_render_generates_teaser_and_assembles_broadcast(tmp_path, monkeypatch):
+    review_dir = tmp_path / "reviews"
+    work_dir = tmp_path / "work"
+    output_dir = tmp_path / "output"
+    for path in (review_dir / "123456", work_dir, output_dir):
+        path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(review_workflow.config, "REVIEW_DIR", str(review_dir))
+    monkeypatch.setattr(review_workflow.config, "WORK_DIR", str(work_dir))
+    monkeypatch.setattr(review_workflow.config, "OUTPUT_DIR", str(output_dir))
+    monkeypatch.setattr(review_workflow, "load_transcript", lambda _job_id: {})
+
+    calls = []
+
+    def fake_extract(_source, _start, _end, output, cuts=None):
+        calls.append(("extract", cuts))
+        open(output, "wb").close()
+
+    def fake_transcribe(path, _status):
+        calls.append(("transcribe", os.path.basename(path)))
+        return {
+            "duration": 1600.0,
+            "segments": [],
+            "words": [{"word": "Hope", "start": 10.0, "end": 11.0}],
+        }
+
+    def fake_fit(_source, _target, output, _status):
+        open(output, "wb").close()
+        return {"final_duration": 1601.0, "original_duration": 1600.0}
+
+    def fake_assemble(_intro, _sermon, _outro, output, _status):
+        calls.append(("assemble", os.path.basename(output)))
+        open(output, "wb").close()
+
+    monkeypatch.setattr(review_workflow, "extract_segment", fake_extract)
+    monkeypatch.setattr(review_workflow, "transcribe", fake_transcribe)
+    monkeypatch.setattr(
+        review_workflow, "select_teaser",
+        lambda *_args: {"teaser_start": 10.0, "teaser_end": 20.0, "reason": "Strong hook"},
+    )
+    monkeypatch.setattr(review_workflow, "get_audio_duration", lambda _path: 1600.0)
+    monkeypatch.setattr(review_workflow, "fit_to_duration", fake_fit)
+    monkeypatch.setattr(
+        review_workflow, "_extract_teaser",
+        lambda _source, _start, _end, output: open(output, "wb").close(),
+    )
+    monkeypatch.setattr(
+        review_workflow.sf, "read",
+        lambda _path, dtype=None: (review_workflow.np.zeros(48000), 48000),
+    )
+    monkeypatch.setattr(
+        review_workflow, "mix_teaser_into_intro",
+        lambda _intro, _audio, _rate, output: open(output, "wb").close(),
+    )
+    monkeypatch.setattr(review_workflow, "assemble_broadcast", fake_assemble)
+    monkeypatch.setattr(
+        review_workflow, "_validate_output_durations",
+        lambda outputs, _requested: {"dynamic": 1770.0},
+    )
+
+    metadata = {
+        "review": {
+            "audio_duration": 1700.0,
+            "target_duration": "29:30",
+            "sermon_target_seconds": 1600.0,
+            "include_dynamic": True,
+            "include_stock": False,
+            "manual_selection": True,
+            "manual_teaser": False,
+            "teaser_window_seconds": 23.0,
+        },
+        "artifacts": {"teaser_source": "raw_audio.wav"},
+        "boundaries": {},
+    }
+    result = review_workflow.render_job(
+        "123456", metadata,
+        {"sermon_start": 50.0, "sermon_end": 1650.0, "cuts": []},
+    )
+
+    assert ("transcribe", "sermon_raw.wav") in calls
+    assert any(call[0] == "assemble" for call in calls)
+    assert result["outputs"][0]["variant"] == "dynamic"
+    assert result["teaser"]["reason"] == "Strong hook"
 
 
 def test_preflight_still_rejects_materially_out_of_bounds_end():

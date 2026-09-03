@@ -86,7 +86,7 @@
         #waveform { display: block; width: 100%; height: 150px; touch-action: none; }
         .wave-legend { display: flex; gap: 1rem; margin-top: .5rem; color: var(--muted); font-size: .78rem; }
         .key { display: inline-block; width: .75rem; height: .75rem; border-radius: 2px; vertical-align: -.1rem; margin-right: .3rem; }
-        .key.sermon { background: var(--green); } .key.teaser { background: var(--accent); }
+        .key.sermon { background: var(--green); } .key.teaser { background: var(--accent); } .key.cut { background: var(--red); }
         .marker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin-top: 1rem; }
         .marker-group { background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: .9rem; }
         .marker-group h3 { margin: 0 0 .7rem; font: 700 .75rem ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; color: var(--green); }
@@ -98,6 +98,12 @@
         .small-btn, .marker-btn { background: var(--raised); color: var(--text); border: 1px solid var(--border); padding: .38rem .5rem; font: .7rem ui-monospace, monospace; }
         .marker-btn { background: var(--green); border-color: var(--green); color: white; }
         .teaser .marker-btn { background: var(--accent-dark); border-color: var(--accent-dark); }
+        .cuts-panel { margin-top: .75rem; }
+        .cuts-panel h3 { color: var(--red); }
+        .cuts-panel .marker-btn { background: var(--red); border-color: var(--red); }
+        .cut-module { border-top: 1px solid var(--border); padding-top: .65rem; margin-top: .65rem; }
+        .cut-toggle { display: flex; align-items: center; gap: .55rem; margin: 0; cursor: pointer; }
+        .cut-toggle input { width: 18px; height: 18px; accent-color: var(--red); }
         .preview-row { display: flex; gap: .55rem; flex-wrap: wrap; margin-top: 1rem; }
         .edit-transport { display: flex; gap: .45rem; align-items: center; flex-wrap: wrap; margin-top: .8rem; }
         .edit-transport label { margin: 0 0 0 auto; }
@@ -108,6 +114,7 @@
         .segment:hover { background: var(--raised); }
         .segment.in-sermon { background: var(--green-soft); }
         .segment.in-teaser { background: var(--gold-soft); box-shadow: inset 3px 0 var(--accent); }
+        .segment.in-cut { background: rgba(197,101,101,.2); box-shadow: inset 3px 0 var(--red); }
         .segment .time { color: var(--muted); font-size: .7rem; padding-top: .15rem; }
         .plan { position: sticky; top: .75rem; }
         .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; margin: 1rem 0; }
@@ -170,7 +177,11 @@
                 </label>
                 <label class="choice">
                     <input type="checkbox" id="manualSelectionCheckbox">
-                    <span><strong>I’ll select the sermon manually</strong><small>Pull audio from YouTube or an uploaded recording, then crop it in the editor. Teaser markers will also be manual.</small></span>
+                    <span><strong>I’ll select the sermon manually</strong><small>Pull audio from YouTube or an uploaded recording, crop it in the editor, then create the complete broadcast.</small></span>
+                </label>
+                <label class="choice" id="manualTeaserChoice">
+                    <input type="checkbox" id="manualTeaserCheckbox" disabled>
+                    <span><strong>I’ll select the teaser manually too</strong><small>Show teaser markers in the editor. Otherwise a teaser is selected automatically after the sermon edit.</small></span>
                 </label>
                 <label class="choice">
                     <input type="checkbox" id="sermonOnlyCheckbox">
@@ -225,7 +236,7 @@
                 </select>
             </div>
             <div class="wave-wrap"><canvas id="waveform" height="150" aria-label="Audio waveform timeline"></canvas></div>
-            <div class="wave-legend"><span><i class="key sermon"></i>Sermon</span><span><i class="key teaser"></i>Teaser</span></div>
+            <div class="wave-legend"><span><i class="key sermon"></i>Sermon</span><span><i class="key teaser"></i>Teaser</span><span><i class="key cut"></i>Cut</span></div>
 
             <div class="marker-grid">
                 <div class="marker-group">
@@ -251,6 +262,11 @@
                     </div>
                 </div>
             </div>
+            <div class="marker-group cuts-panel">
+                <h3>Optional interior cuts</h3>
+                <p class="panel-intro">Enable up to three ranges to remove announcements, pauses, or other unwanted audio inside the sermon.</p>
+                <div id="cutModules"></div>
+            </div>
             <div class="preview-row">
                 <button class="secondary" id="previewStartBtn">Preview sermon start</button>
                 <button class="secondary" id="previewEndBtn">Preview sermon ending</button>
@@ -274,11 +290,12 @@
                     <div class="metric"><div class="metric-label">Sermon time available</div><div class="metric-value" id="targetSermonDuration">—</div></div>
                     <div class="metric"><div class="metric-label">Adjustment needed</div><div class="metric-value" id="differenceDuration">—</div></div>
                     <div class="metric"><div class="metric-label">Teaser</div><div class="metric-value" id="teaserDuration">—</div></div>
+                    <div class="metric"><div class="metric-label">Cut time removed</div><div class="metric-value" id="cutDuration">0:00</div></div>
                 </div>
                 <div id="preflightNotices"></div>
                 <label class="choice" style="margin-top:.8rem">
                     <input type="checkbox" id="reviewConfirmed">
-                    <span><strong>I listened to these selections</strong><small>I checked the sermon opening, ending, and teaser.</small></span>
+                    <span><strong>I listened to these selections</strong><small id="confirmationHelp">I checked the sermon opening, ending, and teaser.</small></span>
                 </label>
                 <button class="primary" id="renderBtn" disabled>Create broadcast</button>
             </aside>
@@ -297,7 +314,7 @@
 <script>
     const DEFAULT_SERMON_DURATION = '{{ default_duration }}';
     const DEFAULT_BROADCAST_DURATION = '{{ default_broadcast_duration }}';
-    const state = { jobId: null, review: null, transcript: null, waveform: null, markers: {}, poll: null, previewStop: null, preflightTimer: null, preflightReady: false };
+    const state = { jobId: null, review: null, transcript: null, waveform: null, markers: {}, cuts: [], poll: null, previewStop: null, preflightTimer: null, preflightReady: false };
 
     const $ = id => document.getElementById(id);
     const esc = value => { const d = document.createElement('div'); d.textContent = value == null ? '' : String(value); return d.innerHTML; };
@@ -319,6 +336,19 @@
         if (numbers.length === 3 && numbers[1] >= 60) return null;
         return numbers.reduce((total, number) => total * 60 + number, 0);
     };
+    $('cutModules').innerHTML = [0, 1, 2].map(index => `
+        <div class="cut-module">
+            <label class="cut-toggle"><input type="checkbox" data-cut-toggle="${index}"> Cut section ${index + 1}</label>
+            <div class="hidden" data-cut-controls="${index}">
+                <div class="marker-row"><span class="name">Start</span><input class="value" data-cut-input="${index}:start" aria-label="Cut ${index + 1} start time"><span class="marker-controls"><button class="small-btn" data-cut-nudge="${index}:start:-1">−1s</button><button class="marker-btn" data-cut-set="${index}:start">Set at playhead</button><button class="small-btn" data-cut-nudge="${index}:start:1">+1s</button></span></div>
+                <div class="marker-row"><span class="name">End</span><input class="value" data-cut-input="${index}:end" aria-label="Cut ${index + 1} end time"><span class="marker-controls"><button class="small-btn" data-cut-nudge="${index}:end:-1">−1s</button><button class="marker-btn" data-cut-set="${index}:end">Set at playhead</button><button class="small-btn" data-cut-nudge="${index}:end:1">+1s</button></span></div>
+                <button class="secondary" type="button" data-cut-preview="${index}">Preview section to cut</button>
+            </div>
+        </div>`).join('');
+    const selectionPayload = () => ({
+        ...state.markers,
+        cuts: state.cuts.filter(cut => cut.enabled).map(cut => ({start: cut.start, end: cut.end})),
+    });
     async function readJsonResponse(response, label) {
         const text = await response.text();
         if (!response.ok) {
@@ -348,14 +378,35 @@
         $('dynamicCheckbox'), $('stockCheckbox'),
         $('manualSelectionCheckbox'), $('sermonOnlyCheckbox'),
     ];
-    $('dynamicCheckbox').addEventListener('change', () => { syncDurationDefault(); syncAnalyzeAvailability(); });
+    $('dynamicCheckbox').addEventListener('change', () => {
+        if ($('manualSelectionCheckbox').checked && !$('dynamicCheckbox').checked) {
+            $('dynamicCheckbox').checked = true;
+        }
+        syncDurationDefault(); syncAnalyzeAvailability();
+    });
     $('stockCheckbox').addEventListener('change', () => { syncDurationDefault(); syncAnalyzeAvailability(); });
     $('manualSelectionCheckbox').addEventListener('change', () => {
-        if ($('manualSelectionCheckbox').checked) $('sermonOnlyCheckbox').checked = false;
+        if ($('manualSelectionCheckbox').checked) {
+            $('sermonOnlyCheckbox').checked = false;
+            $('dynamicCheckbox').checked = true;
+        } else {
+            $('manualTeaserCheckbox').checked = false;
+            $('dynamicCheckbox').checked = false;
+        }
+        $('dynamicCheckbox').disabled = $('manualSelectionCheckbox').checked;
+        $('manualTeaserCheckbox').disabled = !$('manualSelectionCheckbox').checked;
+        syncDurationDefault();
         syncSourceMode();
     });
     $('sermonOnlyCheckbox').addEventListener('change', () => {
-        if ($('sermonOnlyCheckbox').checked) $('manualSelectionCheckbox').checked = false;
+        if ($('sermonOnlyCheckbox').checked && $('manualSelectionCheckbox').checked) {
+            $('manualSelectionCheckbox').checked = false;
+            $('dynamicCheckbox').checked = false;
+            syncDurationDefault();
+        }
+        $('dynamicCheckbox').disabled = false;
+        $('manualTeaserCheckbox').disabled = true;
+        $('manualTeaserCheckbox').checked = false;
         syncSourceMode();
     });
     function syncDurationDefault() {
@@ -369,6 +420,9 @@
         $('analyzeBtn').disabled = !workflowCheckboxes.some(checkbox => checkbox.checked);
     }
     workflowCheckboxes.forEach(checkbox => { checkbox.checked = false; });
+    $('dynamicCheckbox').disabled = false;
+    $('manualTeaserCheckbox').checked = false;
+    $('manualTeaserCheckbox').disabled = true;
     syncDurationDefault();
     syncSourceMode();
 
@@ -385,6 +439,7 @@
                 include_bumpers_stock: $('stockCheckbox').checked,
                 sermon_only: $('sermonOnlyCheckbox').checked,
                 manual_selection: manualSelection,
+                manual_teaser: manualSelection && $('manualTeaserCheckbox').checked,
             };
             if (file) {
                 const form = new FormData(); form.append('file', file); Object.entries(values).forEach(([k,v]) => form.append(k, String(v)));
@@ -426,16 +481,29 @@
             teaser_start: job.review.teaser_start == null ? null : Number(job.review.teaser_start),
             teaser_end: job.review.teaser_end == null ? null : Number(job.review.teaser_end),
         };
+        const savedCuts = Array.isArray(job.review.cuts) ? job.review.cuts : [];
+        state.cuts = [0, 1, 2].map(index => ({
+            enabled: Boolean(savedCuts[index]),
+            start: savedCuts[index] == null ? null : Number(savedCuts[index].start),
+            end: savedCuts[index] == null ? null : Number(savedCuts[index].end),
+        }));
         $('sourcePanel').classList.add('hidden'); $('finishPanel').classList.add('hidden'); $('editorPanel').classList.remove('hidden'); setStep('Review');
         $('reviewConfirmed').checked = Boolean(job.review.markers_confirmed);
         $('sermonTitle').textContent = job.review.title || 'Review the sermon';
         $('confidenceText').textContent = job.review.manual_selection
             ? 'Manual mode: crop the sermon with the green start and end markers.'
             : `Automated confidence: ${job.review.confidence || '—'}.`;
-        $('reviewPrompt').textContent = job.review.include_dynamic
+        const manualTeaser = job.review.manual_selection && job.review.manual_teaser;
+        const showTeaserMarkers = job.review.include_dynamic && (!job.review.manual_selection || manualTeaser);
+        $('reviewPrompt').textContent = showTeaserMarkers
             ? 'Listen and confirm the sermon and teaser markers before creating the broadcast.'
-            : 'Listen and confirm the sermon start and end before creating the broadcast.';
-        $('teaserMarkers').classList.toggle('hidden', !job.review.include_dynamic); $('previewTeaserBtn').classList.toggle('hidden', !job.review.include_dynamic); $('previewIntroBtn').classList.toggle('hidden', !job.review.include_dynamic);
+            : job.review.include_dynamic
+                ? 'Confirm the sermon edit; a teaser will be selected automatically afterward.'
+                : 'Listen and confirm the sermon start and end before creating the broadcast.';
+        $('confirmationHelp').textContent = showTeaserMarkers
+            ? 'I checked the sermon opening, ending, cuts, and teaser.'
+            : 'I checked the sermon opening, ending, and cuts.';
+        $('teaserMarkers').classList.toggle('hidden', !showTeaserMarkers); $('previewTeaserBtn').classList.toggle('hidden', !showTeaserMarkers); $('previewIntroBtn').classList.toggle('hidden', !showTeaserMarkers);
         $('sourceAudio').src = `/api/jobs/${encodeURIComponent(state.jobId)}/audio`; $('totalTime').textContent = fmt(job.review.audio_duration);
         const [transcriptResponse, waveformResponse] = await Promise.all([
             fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/transcript`), fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/waveform`)
@@ -448,7 +516,9 @@
     function renderTranscript() {
         const segments = state.transcript?.segments || [];
         const emptyMessage = state.review?.manual_selection
-            ? 'Manual mode skips transcription. Use the waveform and audio controls above to find the sermon.'
+            ? state.review.manual_teaser
+                ? 'Fully manual mode does not require transcription. Use the waveform and audio controls above.'
+                : 'Use the waveform and audio controls to edit the sermon. The edited result will be transcribed afterward to select a teaser.'
             : 'No transcript segments were returned.';
         $('transcript').innerHTML = segments.map((segment, index) => `<button class="segment" data-segment="${index}"><span class="time">${fmt(segment.start)}</span><span>${esc(segment.text)}</span></button>`).join('') || `<div class="muted" style="padding:1rem">${emptyMessage}</div>`;
         $('transcript').onclick = event => { const button = event.target.closest('[data-segment]'); if (!button) return; const segment = segments[Number(button.dataset.segment)]; $('sourceAudio').currentTime = Number(segment.start); safePlay($('sourceAudio')); };
@@ -461,6 +531,7 @@
             const segment = segments[Number(button.dataset.segment)]; const mid = (Number(segment.start) + Number(segment.end)) / 2;
             button.classList.toggle('in-sermon', mid >= state.markers.sermon_start && mid <= state.markers.sermon_end);
             button.classList.toggle('in-teaser', state.markers.teaser_start != null && mid >= state.markers.teaser_start && mid <= state.markers.teaser_end);
+            button.classList.toggle('in-cut', state.cuts.some(cut => cut.enabled && mid >= cut.start && mid <= cut.end));
         });
     }
 
@@ -469,6 +540,16 @@
         $('teaserStartValue').value = state.markers.teaser_start == null ? '' : fmt(state.markers.teaser_start, true); $('teaserEndValue').value = state.markers.teaser_end == null ? '' : fmt(state.markers.teaser_end, true);
         const teaserReady = state.markers.teaser_start != null && state.markers.teaser_end != null;
         $('previewTeaserBtn').disabled = !teaserReady; $('previewIntroBtn').disabled = !teaserReady;
+        state.cuts.forEach((cut, index) => {
+            const toggle = document.querySelector(`[data-cut-toggle="${index}"]`);
+            const controls = document.querySelector(`[data-cut-controls="${index}"]`);
+            toggle.checked = cut.enabled;
+            controls.classList.toggle('hidden', !cut.enabled);
+            for (const edge of ['start', 'end']) {
+                const input = document.querySelector(`[data-cut-input="${index}:${edge}"]`);
+                input.value = cut[edge] == null ? '' : fmt(cut[edge], true);
+            }
+        });
         highlightTranscript(); drawWaveform(); schedulePreflight();
     }
 
@@ -483,9 +564,33 @@
         input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); commit(); input.blur(); } });
     });
 
+    document.querySelectorAll('[data-cut-toggle]').forEach(toggle => {
+        toggle.addEventListener('change', () => {
+            const index = Number(toggle.dataset.cutToggle); const cut = state.cuts[index];
+            cut.enabled = toggle.checked;
+            if (cut.enabled && (cut.start == null || cut.end == null)) {
+                cut.start = Math.max(state.markers.sermon_start, $('sourceAudio').currentTime || state.markers.sermon_start);
+                cut.end = Math.min(state.markers.sermon_end, cut.start + 10);
+            }
+            updateMarkers();
+        });
+    });
+    document.querySelectorAll('[data-cut-input]').forEach(input => {
+        const commit = () => {
+            const [indexText, edge] = input.dataset.cutInput.split(':'); const cut = state.cuts[Number(indexText)]; const parsed = parseTime(input.value);
+            if (parsed == null) { input.value = cut[edge] == null ? '' : fmt(cut[edge], true); return; }
+            cut[edge] = Math.max(0, Math.min(state.review.audio_duration, parsed)); updateMarkers();
+        };
+        input.addEventListener('change', commit);
+        input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); commit(); input.blur(); } });
+    });
+
     document.addEventListener('click', event => {
         const set = event.target.dataset.set; if (set) { state.markers[set] = $('sourceAudio').currentTime; updateMarkers(); }
         const nudge = event.target.dataset.nudge; if (nudge) { const [key, delta] = nudge.split(':'); if (state.markers[key] != null) state.markers[key] = Math.max(0, Math.min(state.review.audio_duration, state.markers[key] + Number(delta))); updateMarkers(); }
+        const cutSet = event.target.dataset.cutSet; if (cutSet) { const [index, edge] = cutSet.split(':'); state.cuts[Number(index)][edge] = $('sourceAudio').currentTime; updateMarkers(); }
+        const cutNudge = event.target.dataset.cutNudge; if (cutNudge) { const [index, edge, delta] = cutNudge.split(':'); const cut=state.cuts[Number(index)]; cut[edge]=Math.max(0,Math.min(state.review.audio_duration,Number(cut[edge]||0)+Number(delta))); updateMarkers(); }
+        const cutPreview = event.target.dataset.cutPreview; if (cutPreview != null) { const cut=state.cuts[Number(cutPreview)]; if(cut.start!=null&&cut.end!=null) playSource(cut.start,cut.end); }
     });
 
     function drawWaveform() {
@@ -494,9 +599,11 @@
         const w = box.width, h = 150, duration = state.review.audio_duration || 1; ctx.clearRect(0,0,w,h); ctx.fillStyle = '#111115'; ctx.fillRect(0,0,w,h);
         const region = (start,end,color) => { if (start == null || end == null) return; ctx.fillStyle=color; ctx.fillRect(start/duration*w,0,Math.max(1,(end-start)/duration*w),h); };
         region(state.markers.sermon_start,state.markers.sermon_end,'rgba(98,167,117,.20)'); region(state.markers.teaser_start,state.markers.teaser_end,'rgba(209,179,90,.32)');
+        state.cuts.filter(cut=>cut.enabled).forEach(cut=>region(cut.start,cut.end,'rgba(197,101,101,.38)'));
         const peaks = state.waveform.peaks || []; ctx.strokeStyle = '#a9a6a0'; ctx.lineWidth = 1; ctx.beginPath(); peaks.forEach((peak,i) => { const x=i/Math.max(1,peaks.length-1)*w; const amp=Math.max(1,peak*h*.43); ctx.moveTo(x,h/2-amp); ctx.lineTo(x,h/2+amp); }); ctx.stroke();
         const marker = (value,color,atTop) => { if (value == null) return; const x=value/duration*w; ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); ctx.beginPath(); ctx.arc(x,atTop?8:h-8,6,0,Math.PI*2); ctx.fill(); };
         marker(state.markers.sermon_start,'#62a775',true); marker(state.markers.sermon_end,'#62a775',false); marker(state.markers.teaser_start,'#d1b35a',true); marker(state.markers.teaser_end,'#d1b35a',false);
+        state.cuts.filter(cut=>cut.enabled).forEach(cut=>{ marker(cut.start,'#c56565',true); marker(cut.end,'#c56565',false); });
         const playhead = ($('sourceAudio').currentTime || 0)/duration*w; ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(playhead,0); ctx.lineTo(playhead,h); ctx.stroke();
     }
     let draggedMarker = null;
@@ -504,12 +611,15 @@
     $('waveform').addEventListener('pointerdown', event => {
         const rect=event.currentTarget.getBoundingClientRect(); const x=event.clientX-rect.left;
         const keys=['sermon_start','sermon_end',...(state.review.include_dynamic?['teaser_start','teaser_end']:[])].filter(key=>state.markers[key]!=null);
-        draggedMarker=keys.map(key=>({key,distance:Math.abs((state.markers[key]/state.review.audio_duration)*rect.width-x)})).sort((a,b)=>a.distance-b.distance)[0];
+        const candidates=keys.map(key=>({kind:'marker',key,value:state.markers[key]}));
+        state.cuts.forEach((cut,index)=>{ if(cut.enabled){ candidates.push({kind:'cut',index,edge:'start',value:cut.start},{kind:'cut',index,edge:'end',value:cut.end}); } });
+        draggedMarker=candidates.map(item=>({...item,distance:Math.abs((item.value/state.review.audio_duration)*rect.width-x)})).sort((a,b)=>a.distance-b.distance)[0];
         if (!draggedMarker || draggedMarker.distance > 14) { draggedMarker=null; $('sourceAudio').currentTime=waveformTime(event); drawWaveform(); return; }
-        draggedMarker=draggedMarker.key; event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault();
     });
-    $('waveform').addEventListener('pointermove', event => { if(!draggedMarker)return; state.markers[draggedMarker]=waveformTime(event); updateMarkers(); });
-    const finishMarkerDrag = event => { if(!draggedMarker)return; state.markers[draggedMarker]=waveformTime(event); draggedMarker=null; updateMarkers(); };
+    const setDraggedMarker = value => { if(draggedMarker.kind==='cut')state.cuts[draggedMarker.index][draggedMarker.edge]=value;else state.markers[draggedMarker.key]=value; };
+    $('waveform').addEventListener('pointermove', event => { if(!draggedMarker)return; setDraggedMarker(waveformTime(event)); updateMarkers(); });
+    const finishMarkerDrag = event => { if(!draggedMarker)return; setDraggedMarker(waveformTime(event)); draggedMarker=null; updateMarkers(); };
     $('waveform').addEventListener('pointerup', finishMarkerDrag);
     $('waveform').addEventListener('pointercancel', () => { draggedMarker=null; });
     window.addEventListener('resize', drawWaveform); $('sourceAudio').addEventListener('timeupdate', () => { $('currentTime').textContent=fmt($('sourceAudio').currentTime,true); drawWaveform(); if (state.previewStop != null && $('sourceAudio').currentTime >= state.previewStop) { $('sourceAudio').pause(); state.previewStop=null; } });
@@ -523,20 +633,20 @@
     $('previewStartBtn').onclick=()=>playSource(state.markers.sermon_start-3,state.markers.sermon_start+12);
     $('previewEndBtn').onclick=()=>playSource(state.markers.sermon_end-10,state.markers.sermon_end+3);
     $('previewTeaserBtn').onclick=()=>{ if(state.markers.teaser_start!=null&&state.markers.teaser_end!=null) playSource(state.markers.teaser_start,state.markers.teaser_end); };
-    $('previewIntroBtn').onclick=async()=>{ const button=$('previewIntroBtn'); button.disabled=true; button.textContent='Building preview…'; try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preview-teaser`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.markers)}); const data=await response.json(); if(!response.ok) throw new Error(data.error); const audio=$('previewAudio'); audio.src=`${data.url}?v=${Date.now()}`; audio.classList.remove('hidden'); await audio.play(); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent='Preview teaser in intro'; } };
+    $('previewIntroBtn').onclick=async()=>{ const button=$('previewIntroBtn'); button.disabled=true; button.textContent='Building preview…'; try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preview-teaser`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(!response.ok) throw new Error(data.error); const audio=$('previewAudio'); audio.src=`${data.url}?v=${Date.now()}`; audio.classList.remove('hidden'); await audio.play(); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent='Preview teaser in intro'; } };
 
     function schedulePreflight(){ clearTimeout(state.preflightTimer); state.preflightTimer=setTimeout(runPreflight,250); }
     function syncRenderAvailability(){ $('renderBtn').disabled = !(state.preflightReady && $('reviewConfirmed').checked); }
     $('reviewConfirmed').addEventListener('change', syncRenderAvailability);
     async function runPreflight(){
         if(!state.jobId||!state.review) return;
-        try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preflight`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.markers)}); const data=await response.json(); if(!response.ok) throw new Error(data.error);
-            $('selectedDuration').textContent=fmt(data.selected_duration); $('targetSermonDuration').textContent=fmt(data.sermon_target_seconds); const diff=data.difference_seconds; $('differenceDuration').textContent=`${diff>=0?'+':'−'}${fmt(Math.abs(diff))}`; $('teaserDuration').textContent=data.teaser_duration==null?'Not needed':`${data.teaser_duration.toFixed(1)}s / ${state.review.teaser_window_seconds.toFixed(0)}s`;
+        try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preflight`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(!response.ok) throw new Error(data.error);
+            $('selectedDuration').textContent=fmt(data.selected_duration); $('targetSermonDuration').textContent=fmt(data.sermon_target_seconds); const diff=data.difference_seconds; $('differenceDuration').textContent=`${diff>=0?'+':'−'}${fmt(Math.abs(diff))}`; $('teaserDuration').textContent=data.teaser_duration==null?(state.review.include_dynamic?'AI after edit':'Not needed'):`${data.teaser_duration.toFixed(1)}s / ${state.review.teaser_window_seconds.toFixed(0)}s`; $('cutDuration').textContent=fmt(data.cut_duration||0);
             $('preflightNotices').innerHTML=[...data.blockers.map(x=>`<div class="notice error">${esc(x)}</div>`),...data.warnings.map(x=>`<div class="notice warning">${esc(x)}</div>`),...(data.ready&&!data.warnings.length?[`<div class="notice">Ready. Long pauses will be adjusted first, followed by a safe tempo correction if needed.</div>`]:[])].join(''); state.preflightReady=data.ready; syncRenderAvailability();
         } catch(error){ $('preflightNotices').innerHTML=`<div class="notice error">${esc(error.message)}</div>`; state.preflightReady=false; syncRenderAvailability(); }
     }
 
-    $('renderBtn').onclick=async()=>{ $('renderBtn').disabled=true; try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/render`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.markers)}); const data=await response.json(); if(!response.ok) throw new Error(data.error); $('editorPanel').classList.add('hidden'); setStatus('Creating the finished broadcast','Rendering'); pollJob(); } catch(error){ alert(error.message); runPreflight(); } };
+    $('renderBtn').onclick=async()=>{ $('renderBtn').disabled=true; try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/render`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(!response.ok) throw new Error(data.error); $('editorPanel').classList.add('hidden'); setStatus('Creating the finished broadcast','Rendering'); pollJob(); } catch(error){ alert(error.message); runPreflight(); } };
 
     function showFinished(job){
         clearTimeout(state.poll); $('sourcePanel').classList.add('hidden'); $('statusPanel').classList.add('hidden'); $('editorPanel').classList.add('hidden'); $('finishPanel').classList.remove('hidden'); setStep('Finish');

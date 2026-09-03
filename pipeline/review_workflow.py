@@ -168,6 +168,7 @@ def _initial_boundaries(transcript_data: dict, use_full_source: bool,
 def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
                 target_duration: str, include_dynamic: bool, include_stock: bool,
                 sermon_only: bool, manual_selection: bool = False,
+                manual_teaser: bool = False,
                 status_callback=None) -> dict:
     """Prepare and persist everything required by the review editor."""
     started = time.time()
@@ -247,6 +248,7 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
         "include_stock": bool(include_stock),
         "sermon_only": bool(sermon_only),
         "manual_selection": bool(manual_selection),
+        "manual_teaser": bool(manual_teaser),
         "teaser_window_seconds": config.TEASER_WINDOW_END - config.TEASER_WINDOW_START,
         "suggested_sermon_start": float(boundaries["sermon_start"]),
         "suggested_sermon_end": float(boundaries["sermon_end"]),
@@ -289,16 +291,33 @@ def normalize_selections(selections: dict) -> dict:
             "sermon_end": float(selections.get("sermon_end")),
             "teaser_start": None,
             "teaser_end": None,
+            "cuts": [],
         }
         if selections.get("teaser_start") is not None:
             normalized["teaser_start"] = float(selections["teaser_start"])
         if selections.get("teaser_end") is not None:
             normalized["teaser_end"] = float(selections["teaser_end"])
+        raw_cuts = selections.get("cuts") or []
+        if not isinstance(raw_cuts, list) or len(raw_cuts) > 3:
+            raise ValueError("Up to three cut selections are allowed")
+        for cut in raw_cuts:
+            if not isinstance(cut, dict):
+                raise ValueError("Cut selections must have start and end times")
+            if isinstance(cut.get("start"), bool) or isinstance(cut.get("end"), bool):
+                raise ValueError("Cut selections must have valid times")
+            normalized["cuts"].append({
+                "start": float(cut.get("start")),
+                "end": float(cut.get("end")),
+            })
     except (TypeError, ValueError):
         raise ValueError("Selection markers must be valid times") from None
     if any(
         value is not None and not math.isfinite(value)
-        for value in normalized.values()
+        for value in [
+            normalized["sermon_start"], normalized["sermon_end"],
+            normalized["teaser_start"], normalized["teaser_end"],
+            *(point for cut in normalized["cuts"] for point in cut.values()),
+        ]
     ):
         raise ValueError("Selection markers must be finite times")
     return normalized
@@ -321,7 +340,21 @@ def build_preflight(review: dict, selections: dict) -> dict:
     if start < 0 or end <= start or end > audio_duration:
         raise ValueError("Sermon start and end markers are outside the source audio")
 
-    selected_duration = end - start
+    cuts = sorted(selections["cuts"], key=lambda cut: cut["start"])
+    cut_duration = 0.0
+    previous_end = None
+    for cut in cuts:
+        if cut["start"] < start or cut["end"] > end or cut["end"] <= cut["start"]:
+            raise ValueError("Cut selections must be valid ranges inside the sermon")
+        if previous_end is not None and cut["start"] < previous_end:
+            raise ValueError("Cut selections cannot overlap")
+        cut_duration += cut["end"] - cut["start"]
+        previous_end = cut["end"]
+    selections["cuts"] = cuts
+
+    selected_duration = end - start - cut_duration
+    if selected_duration <= 0:
+        raise ValueError("Cut selections cannot remove the entire sermon")
     target = float(review["sermon_target_seconds"])
     difference = selected_duration - target
     blockers = []
@@ -347,13 +380,20 @@ def build_preflight(review: dict, selections: dict) -> dict:
     if review.get("include_dynamic"):
         teaser_start = selections.get("teaser_start")
         teaser_end = selections.get("teaser_end")
-        if teaser_start is None or teaser_end is None:
+        automatic_manual_teaser = (
+            review.get("manual_selection") and not review.get("manual_teaser")
+        )
+        if (teaser_start is None or teaser_end is None) and automatic_manual_teaser:
+            pass
+        elif teaser_start is None or teaser_end is None:
             blockers.append("Select a teaser start and end.")
         else:
             teaser_duration = teaser_end - teaser_start
             max_teaser = float(review["teaser_window_seconds"])
             if teaser_start < start or teaser_end > end:
                 blockers.append("The teaser must be inside the selected sermon.")
+            if any(teaser_start < cut["end"] and teaser_end > cut["start"] for cut in cuts):
+                blockers.append("The teaser cannot overlap a section marked for cutting.")
             if teaser_duration < 3:
                 blockers.append("The teaser is too short; select at least 3 seconds.")
             elif teaser_duration > max_teaser:
@@ -368,6 +408,7 @@ def build_preflight(review: dict, selections: dict) -> dict:
         "sermon_target_seconds": target,
         "difference_seconds": difference,
         "teaser_duration": teaser_duration,
+        "cut_duration": cut_duration,
         "blockers": blockers,
         "warnings": warnings,
         "selections": selections,
@@ -460,8 +501,32 @@ def render_job(job_id: str, metadata: dict, selections: dict,
             status_callback("Extracting the confirmed sermon selection...")
         sermon_raw = os.path.join(work_dir, "sermon_raw.wav")
         extract_segment(
-            raw_audio_path, selected["sermon_start"], selected["sermon_end"], sermon_raw
+            raw_audio_path, selected["sermon_start"], selected["sermon_end"],
+            sermon_raw, cuts=selected["cuts"]
         )
+
+        teaser_transcript = transcript
+        rendered_teaser_source = teaser_source_path
+        teaser_reason = "Manually confirmed in the review editor"
+        if (
+            review.get("include_dynamic")
+            and review.get("manual_selection")
+            and not review.get("manual_teaser")
+        ):
+            if status_callback:
+                status_callback("Transcribing the edited sermon to select a teaser...")
+            teaser_transcript = transcribe(sermon_raw, status_callback)
+            teaser_transcript.pop("transcribed_audio_path", None)
+            edited_duration = get_audio_duration(sermon_raw)
+            if status_callback:
+                status_callback("Selecting a teaser from the edited sermon...")
+            generated_teaser = select_teaser(
+                teaser_transcript, 0.0, edited_duration, status_callback
+            )
+            selected["teaser_start"] = float(generated_teaser["teaser_start"])
+            selected["teaser_end"] = float(generated_teaser["teaser_end"])
+            rendered_teaser_source = sermon_raw
+            teaser_reason = generated_teaser.get("reason") or "Selected after the manual sermon edit"
 
         target_seconds = float(review["sermon_target_seconds"])
         target_string = format_duration(target_seconds + 1.0)
@@ -489,7 +554,7 @@ def render_job(job_id: str, metadata: dict, selections: dict,
                 status_callback("Mixing the confirmed teaser into the intro...")
             teaser_path = os.path.join(work_dir, "teaser.wav")
             _extract_teaser(
-                teaser_source_path,
+                rendered_teaser_source,
                 selected["teaser_start"],
                 selected["teaser_end"],
                 teaser_path,
@@ -508,9 +573,9 @@ def render_job(job_id: str, metadata: dict, selections: dict,
                 "teaser_start": selected["teaser_start"],
                 "teaser_end": selected["teaser_end"],
                 "teaser_text": _teaser_text(
-                    transcript, selected["teaser_start"], selected["teaser_end"]
+                    teaser_transcript, selected["teaser_start"], selected["teaser_end"]
                 ),
-                "reason": "Manually confirmed in the review editor",
+                "reason": teaser_reason,
             }
 
         if review.get("include_stock"):
@@ -539,6 +604,7 @@ def render_job(job_id: str, metadata: dict, selections: dict,
         boundaries.update({
             "sermon_start": selected["sermon_start"],
             "sermon_end": selected["sermon_end"],
+            "cuts": selected["cuts"],
             "confidence": "manual",
             "selection_label": "manually confirmed",
         })

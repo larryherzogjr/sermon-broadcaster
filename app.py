@@ -84,18 +84,22 @@ def _is_youtube_url(value):
 
 def _validate_processing_requirements(target_duration, include_dynamic,
                                       include_stock, sermon_only,
-                                      manual_selection=False):
+                                      manual_selection=False,
+                                      manual_teaser=False):
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed or is not available on PATH")
 
-    if not manual_selection:
+    needs_transcription = not manual_selection or not manual_teaser
+    if needs_transcription:
         backend = (config.TRANSCRIBE_BACKEND or "openai").strip().lower()
         if backend in {"openai", "cloud"} and not config.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY is required for the OpenAI transcription backend")
         if backend == "local" and not config.WHISPER_LOCAL_URL:
             raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
     needs_automatic_analysis = not sermon_only and not manual_selection
-    needs_automatic_teaser = include_dynamic and not manual_selection
+    needs_automatic_teaser = include_dynamic and (
+        not manual_selection or not manual_teaser
+    )
     if (needs_automatic_analysis or needs_automatic_teaser) and not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is required for sermon or teaser analysis")
 
@@ -111,7 +115,7 @@ class Job:
 
     def __init__(self, job_id, target_duration, source, source_type,
                  include_bumpers_dynamic=False, include_bumpers_stock=False,
-                 sermon_only=False, manual_selection=False,
+                 sermon_only=False, manual_selection=False, manual_teaser=False,
                  youtube_url=None, local_file=None):
         self.job_id = job_id
         self.youtube_url = youtube_url
@@ -121,6 +125,7 @@ class Job:
         self.include_bumpers_stock = include_bumpers_stock
         self.sermon_only = sermon_only
         self.manual_selection = manual_selection
+        self.manual_teaser = manual_teaser
 
         db.create_job(
             job_id=job_id,
@@ -157,6 +162,7 @@ def _run_analysis(job: Job):
             include_stock=job.include_bumpers_stock,
             sermon_only=job.sermon_only,
             manual_selection=job.manual_selection,
+            manual_teaser=job.manual_teaser,
             status_callback=job.update_status,
         )
         db.set_analysis_ready(job.job_id, metadata)
@@ -241,6 +247,7 @@ def start_processing():
             include_stock = _as_bool(request.form.get("include_bumpers_stock"), False)
             sermon_only = _as_bool(request.form.get("sermon_only"), False)
             manual_selection = _as_bool(request.form.get("manual_selection"), False)
+            manual_teaser = _as_bool(request.form.get("manual_teaser"), False)
             target_value = request.form.get("target_duration")
         else:
             data = request.get_json(silent=True) or {}
@@ -251,11 +258,19 @@ def start_processing():
             include_stock = _as_bool(data.get("include_bumpers_stock"), False)
             sermon_only = _as_bool(data.get("sermon_only"), False)
             manual_selection = _as_bool(data.get("manual_selection"), False)
+            manual_teaser = _as_bool(data.get("manual_teaser"), False)
             if _as_bool(data.get("include_bumpers"), False) and not (include_dynamic or include_stock):
                 include_dynamic = True
             target_value = data.get("target_duration")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+    if manual_selection:
+        # Manual sermon selection is a complete broadcast workflow. The teaser
+        # is either marked in the editor or generated after the sermon edit.
+        include_dynamic = True
+    else:
+        manual_teaser = False
 
     any_bumpers = include_dynamic or include_stock
     default_duration = (
@@ -278,7 +293,7 @@ def start_processing():
         parse_duration(target_duration)
         _validate_processing_requirements(
             target_duration, include_dynamic, include_stock, sermon_only,
-            manual_selection,
+            manual_selection, manual_teaser,
         )
     except (ValueError, RuntimeError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -301,6 +316,7 @@ def start_processing():
               include_bumpers_stock=include_stock,
               sermon_only=sermon_only,
               manual_selection=manual_selection,
+              manual_teaser=manual_teaser,
               youtube_url=None if local_file else youtube_url,
               local_file=local_file)
 

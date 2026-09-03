@@ -42,3 +42,16 @@ def test_extract_segment_clamps_end_to_decoded_audio_boundary(tmp_path):
     audio_processor.extract_segment(str(source), 0.0, 1.01, str(output))
 
     assert sf.info(output).frames == 48000
+
+
+def test_extract_segment_removes_manual_cut(tmp_path):
+    source = tmp_path / "source.wav"
+    output = tmp_path / "selection.wav"
+    sf.write(source, np.full(96000, 0.25), 48000, subtype="PCM_16")
+
+    audio_processor.extract_segment(
+        str(source), 0.0, 2.0, str(output), cuts=[{"start": 0.5, "end": 1.0}]
+    )
+
+    # The 50 ms crossfade overlaps the retained sides in addition to the cut.
+    assert sf.info(output).frames == 69600

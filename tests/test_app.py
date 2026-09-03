@@ -46,6 +46,7 @@ def test_basic_pages_and_health_render(client):
     assert "new URLSearchParams(location.search).get('job')" in index_html
     assert 'id="newSessionLink"' in index_html
     assert 'id="manualSelectionCheckbox"' in index_html
+    assert 'id="manualTeaserCheckbox" disabled' in index_html
     assert "I’ll select the sermon manually" in index_html
     assert 'id="dynamicCheckbox">' in index_html
     assert 'id="analyzeBtn" disabled' in index_html
@@ -78,7 +79,7 @@ def test_boolean_normalization(app_module, value, expected):
     assert app_module._as_bool(value) is expected
 
 
-def test_manual_selection_does_not_require_anthropic(app_module, monkeypatch):
+def test_fully_manual_selection_does_not_require_anthropic(app_module, monkeypatch):
     monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/tool")
     monkeypatch.setattr(app_module.config, "TRANSCRIBE_BACKEND", "faster-whisper")
     monkeypatch.setattr(app_module.config, "ANTHROPIC_API_KEY", "")
@@ -87,7 +88,7 @@ def test_manual_selection_does_not_require_anthropic(app_module, monkeypatch):
     )
 
     app_module._validate_processing_requirements(
-        "27:18", True, False, False, manual_selection=True
+        "27:18", True, False, False, manual_selection=True, manual_teaser=True
     )
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
@@ -96,7 +97,7 @@ def test_manual_selection_does_not_require_anthropic(app_module, monkeypatch):
         )
 
 
-def test_manual_selection_does_not_require_transcription_service(app_module, monkeypatch):
+def test_fully_manual_selection_does_not_require_transcription_service(app_module, monkeypatch):
     monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/tool")
     monkeypatch.setattr(app_module.config, "TRANSCRIBE_BACKEND", "local")
     monkeypatch.setattr(app_module.config, "WHISPER_LOCAL_URL", "")
@@ -106,12 +107,12 @@ def test_manual_selection_does_not_require_transcription_service(app_module, mon
     )
 
     app_module._validate_processing_requirements(
-        "27:18", True, False, False, manual_selection=True
+        "27:18", True, False, False, manual_selection=True, manual_teaser=True
     )
 
     with pytest.raises(RuntimeError, match="WHISPER_LOCAL_URL"):
         app_module._validate_processing_requirements(
-            "27:18", True, False, False, manual_selection=False
+            "27:18", True, False, False, manual_selection=True, manual_teaser=False
         )
 
 
@@ -228,6 +229,8 @@ def test_manual_selection_mode_is_forwarded_to_analysis(client, app_module, monk
 
     assert response.status_code == 200
     assert started[0][0].manual_selection is True
+    assert started[0][0].manual_teaser is False
+    assert started[0][0].include_bumpers_dynamic is True
 
 
 def test_render_claim_is_atomic(app_module):

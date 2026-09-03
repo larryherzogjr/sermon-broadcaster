@@ -54,7 +54,24 @@ def _parse_duration(duration_str: str) -> float:
         raise ValueError(f"Invalid duration format: {duration_str}")
 
 
-def extract_segment(audio_path: str, start: float, end: float, output_path: str) -> str:
+def _splice_out_samples(data, start_sample: int, end_sample: int,
+                        crossfade_samples: int):
+    """Remove one sample range and smooth the join with a short crossfade."""
+    start_sample = max(0, min(start_sample, len(data)))
+    end_sample = max(start_sample, min(end_sample, len(data)))
+    before = data[:start_sample]
+    after = data[end_sample:]
+    fade_length = min(crossfade_samples, len(before), len(after))
+    if fade_length <= 0:
+        return np.concatenate([before, after])
+    fade_out = np.linspace(1.0, 0.0, fade_length)
+    fade_in = np.linspace(0.0, 1.0, fade_length)
+    joined = before[-fade_length:].copy() * fade_out + after[:fade_length].copy() * fade_in
+    return np.concatenate([before[:-fade_length], joined, after[fade_length:]])
+
+
+def extract_segment(audio_path: str, start: float, end: float, output_path: str,
+                    cuts: list = None) -> str:
     """Extract a time segment from the audio file.
     Uses soundfile for reliable sample-accurate extraction.
     Adds a small pre-roll buffer and fade-in/fade-out for clean transitions.
@@ -86,6 +103,19 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str)
     if len(data.shape) > 1:
         data = data.mean(axis=1)
 
+    # Cut ranges use source-audio timestamps. Process from right to left so
+    # removing a later range never shifts the sample indexes of an earlier one.
+    applied_cuts = []
+    for cut in sorted(cuts or [], key=lambda item: float(item["start"]), reverse=True):
+        cut_start = max(start, float(cut["start"]))
+        cut_end = min(end, float(cut["end"]))
+        if cut_end <= cut_start:
+            continue
+        relative_start = int(round((cut_start - padded_start) * sr))
+        relative_end = int(round((cut_end - padded_start) * sr))
+        data = _splice_out_samples(data, relative_start, relative_end, int(0.05 * sr))
+        applied_cuts.append((cut_start, cut_end))
+
     # Apply fade-in (300ms) and fade-out (500ms)
     fade_in_samples = int(0.3 * sr)
     fade_out_samples = int(0.5 * sr)
@@ -103,6 +133,8 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str)
 
     duration = len(data) / sr
     logger.info(f"Extracted segment: {padded_start:.1f}s - {end:.1f}s ({duration:.1f}s) from {audio_path}")
+    if applied_cuts:
+        logger.info("Applied %d manual cut(s) while extracting", len(applied_cuts))
     return output_path
 
 
