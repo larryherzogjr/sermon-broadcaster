@@ -46,7 +46,9 @@ def test_basic_pages_and_health_render(client):
     assert "new URLSearchParams(location.search).get('job')" in index_html
     assert 'id="newSessionLink"' in index_html
     assert 'id="manualSelectionCheckbox"' in index_html
-    assert 'id="manualTeaserCheckbox" disabled' in index_html
+    assert 'id="manualTeaserCheckbox"' not in index_html
+    assert 'id="manualTeaserEditorCheckbox"' in index_html
+    assert 'id="applyCutBtn"' in index_html
     assert "I’ll select the sermon manually" in index_html
     assert 'id="dynamicCheckbox">' in index_html
     assert 'id="analyzeBtn" disabled' in index_html
@@ -97,7 +99,7 @@ def test_fully_manual_selection_does_not_require_anthropic(app_module, monkeypat
         )
 
 
-def test_fully_manual_selection_does_not_require_transcription_service(app_module, monkeypatch):
+def test_manual_editor_defers_transcription_requirements_until_render(app_module, monkeypatch):
     monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/tool")
     monkeypatch.setattr(app_module.config, "TRANSCRIBE_BACKEND", "local")
     monkeypatch.setattr(app_module.config, "WHISPER_LOCAL_URL", "")
@@ -110,10 +112,9 @@ def test_fully_manual_selection_does_not_require_transcription_service(app_modul
         "27:18", True, False, False, manual_selection=True, manual_teaser=True
     )
 
-    with pytest.raises(RuntimeError, match="WHISPER_LOCAL_URL"):
-        app_module._validate_processing_requirements(
-            "27:18", True, False, False, manual_selection=True, manual_teaser=False
-        )
+    app_module._validate_processing_requirements(
+        "27:18", True, False, False, manual_selection=True, manual_teaser=False
+    )
 
 
 def test_invalid_requests_fail_before_processing(client):

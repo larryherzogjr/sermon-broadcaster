@@ -158,59 +158,65 @@ def remove_segment(audio_path: str, remove_start: float, remove_end: float,
     info = sf.info(audio_path)
     sr = info.samplerate
 
-    data, sr = sf.read(audio_path, dtype='float64')
-
-    # Convert to mono if stereo
-    if len(data.shape) > 1:
-        data = data.mean(axis=1)
-
-    remove_start_sample = int(remove_start * sr)
-    remove_end_sample = int(remove_end * sr)
+    remove_start_sample = int(round(remove_start * sr))
+    remove_end_sample = int(round(remove_end * sr))
 
     # Bounds check
-    remove_start_sample = max(0, min(remove_start_sample, len(data)))
-    remove_end_sample = max(remove_start_sample, min(remove_end_sample, len(data)))
+    remove_start_sample = max(0, min(remove_start_sample, info.frames))
+    remove_end_sample = max(remove_start_sample, min(remove_end_sample, info.frames))
+    if remove_end_sample <= remove_start_sample:
+        raise ValueError("The selected cut range is empty or outside the source audio")
 
     crossfade_samples = int(crossfade_ms / 1000.0 * sr)
 
-    # Get the two parts: before and after the removed segment
-    before = data[:remove_start_sample]
-    after = data[remove_end_sample:]
+    can_crossfade = (
+        crossfade_samples > 0
+        and remove_start_sample >= crossfade_samples
+        and info.frames - remove_end_sample >= crossfade_samples
+    )
+    block_frames = 262144
 
-    if len(before) == 0:
-        # Nothing before — just use after
-        result = after
-    elif len(after) == 0:
-        # Nothing after — just use before
-        result = before
-    elif crossfade_samples > 0 and len(before) > crossfade_samples and len(after) > crossfade_samples:
-        # Apply crossfade at the splice point
-        # Take the last crossfade_samples of "before" and fade them down
-        # Take the first crossfade_samples of "after" and fade them up
-        # Mix them to create a smooth transition
-        fade_out = np.linspace(1.0, 0.0, crossfade_samples)
-        fade_in = np.linspace(0.0, 1.0, crossfade_samples)
+    def copy_frames(source, destination, frame_count):
+        remaining = frame_count
+        while remaining > 0:
+            block = source.read(
+                min(block_frames, remaining), dtype="float64", always_2d=True
+            )
+            if not len(block):
+                break
+            destination.write(block)
+            remaining -= len(block)
 
-        before_tail = before[-crossfade_samples:].copy() * fade_out
-        after_head = after[:crossfade_samples].copy() * fade_in
-        crossfade_region = before_tail + after_head
-
-        result = np.concatenate([
-            before[:-crossfade_samples],
-            crossfade_region,
-            after[crossfade_samples:],
-        ])
-    else:
-        # No crossfade — just hard splice
-        result = np.concatenate([before, after])
-
-    # Clip to prevent any overflow from the crossfade
-    result = np.clip(result, -1.0, 1.0)
-
-    sf.write(output_path, result, sr, subtype='PCM_16')
+    # Stream the retained audio so a long service recording is never loaded
+    # into memory merely to make one edit.
+    with sf.SoundFile(audio_path) as source, sf.SoundFile(
+        output_path,
+        mode="w",
+        samplerate=sr,
+        channels=info.channels,
+        subtype="PCM_16",
+        format="WAV",
+    ) as destination:
+        if can_crossfade:
+            copy_frames(source, destination, remove_start_sample - crossfade_samples)
+            before_tail = source.read(
+                crossfade_samples, dtype="float64", always_2d=True
+            )
+            source.seek(remove_end_sample)
+            after_head = source.read(
+                crossfade_samples, dtype="float64", always_2d=True
+            )
+            fade_out = np.linspace(1.0, 0.0, crossfade_samples)[:, None]
+            fade_in = np.linspace(0.0, 1.0, crossfade_samples)[:, None]
+            destination.write(np.clip(before_tail * fade_out + after_head * fade_in, -1.0, 1.0))
+            copy_frames(source, destination, info.frames - source.tell())
+        else:
+            copy_frames(source, destination, remove_start_sample)
+            source.seek(remove_end_sample)
+            copy_frames(source, destination, info.frames - remove_end_sample)
 
     removed_duration = remove_end - remove_start
-    final_duration = len(result) / sr
+    final_duration = get_audio_duration(output_path)
     logger.info(
         f"Removed segment {remove_start:.2f}s - {remove_end:.2f}s "
         f"({removed_duration:.2f}s removed); output {final_duration:.1f}s"

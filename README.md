@@ -9,7 +9,7 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 - **Two input methods:** YouTube URL or direct video/audio file upload (5 GB by default)
 - **Human review editor** with a waveform, clickable transcript, and exact sermon/teaser markers
 - **Manual sermon extraction** from a YouTube link or uploaded video/audio, with
-  draggable crop markers, up to three interior cuts, precise time entry,
+  draggable crop markers, repeatable cut-and-join editing, precise time entry,
   scrubbing, and variable-speed playback
 - **Two-stage workflow:** analyze once, review selections, then render without downloading or transcribing again
 - **Intelligent sermon boundary detection** using Claude API with word-level timestamp refinement
@@ -58,9 +58,11 @@ Analysis artifacts are stored under `state/review_jobs/<job_id>/` so a review ca
 Choose **I’ll select the sermon manually** to bypass automatic sermon-boundary
 detection and open the decoded recording at its full range. This mode works for
 YouTube links and uploaded video or audio and always produces the complete
-intro/sermon/outro broadcast. Enable **I’ll select the teaser manually too** to
-show teaser markers in the editor. Otherwise, only the edited sermon is sent to
-Whisper and the teaser selector after the crop and cuts are confirmed.
+intro/sermon/outro broadcast. Inside the editor, enable **Select the teaser
+manually** to reveal its markers. Otherwise, only the edited sermon is sent to
+Whisper and the teaser selector after the crop and cuts are confirmed. Each cut
+is applied immediately to the job's working audio, after which the shortened
+waveform can be edited and cut again.
 
 ## Setup
 

@@ -22,7 +22,12 @@ from pipeline.assembler import (
     get_bumper_durations,
     mix_teaser_into_intro,
 )
-from pipeline.audio_processor import extract_segment, fit_to_duration, get_audio_duration
+from pipeline.audio_processor import (
+    extract_segment,
+    fit_to_duration,
+    get_audio_duration,
+    remove_segment,
+)
 from pipeline.boundary_detector import detect_boundaries
 from pipeline.downloader import download_audio
 from pipeline.orchestrator import select_content_combination
@@ -68,6 +73,147 @@ def load_transcript(job_id: str) -> dict:
     path = os.path.join(review_job_dir(job_id), "transcript.json")
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _time_after_cut(value: float, cut_start: float, cut_end: float,
+                    actual_reduction: float) -> float:
+    """Map a marker from the old working audio onto the newly spliced audio."""
+    value = float(value)
+    if value <= cut_start:
+        return value
+    if value >= cut_end:
+        return max(cut_start, value - actual_reduction)
+    return cut_start
+
+
+def _transcript_after_cut(transcript: dict, cut_start: float, cut_end: float,
+                          actual_reduction: float, new_duration: float) -> dict:
+    """Drop cut transcript entries and shift later timestamps for editor display."""
+    updated = dict(transcript or {})
+    for collection_name in ("segments", "words"):
+        kept = []
+        for item in updated.get(collection_name, []) or []:
+            try:
+                start = float(item["start"])
+                end = float(item["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start < cut_end and end > cut_start:
+                continue
+            adjusted = dict(item)
+            adjusted["start"] = _time_after_cut(
+                start, cut_start, cut_end, actual_reduction
+            )
+            adjusted["end"] = _time_after_cut(
+                end, cut_start, cut_end, actual_reduction
+            )
+            kept.append(adjusted)
+        updated[collection_name] = kept
+    updated["duration"] = new_duration
+    if "segments" in updated:
+        updated["full_text"] = " ".join(
+            str(segment.get("text") or "").strip()
+            for segment in updated["segments"]
+            if str(segment.get("text") or "").strip()
+        )
+    return updated
+
+
+def apply_working_cut(job_id: str, metadata: dict, selections: dict,
+                      cut_start: float, cut_end: float) -> dict:
+    """Permanently splice one range from a review job's editable working audio."""
+    review = dict(metadata.get("review") or {})
+    if not review:
+        raise ValueError("Review data is no longer available for this job")
+    try:
+        cut_start = float(cut_start)
+        cut_end = float(cut_end)
+    except (TypeError, ValueError):
+        raise ValueError("Cut boundaries must be valid times") from None
+    if not math.isfinite(cut_start) or not math.isfinite(cut_end):
+        raise ValueError("Cut boundaries must be finite times")
+
+    normalized = normalize_selections(
+        selections, manual_teaser_default=bool(review.get("manual_teaser"))
+    )
+    sermon_start = normalized["sermon_start"]
+    sermon_end = normalized["sermon_end"]
+    old_duration = float(review.get("audio_duration") or 0.0)
+    if (
+        cut_start < sermon_start or cut_end > sermon_end
+        or cut_start < 0 or cut_end > old_duration or cut_end <= cut_start
+    ):
+        raise ValueError("Choose a valid cut range inside the selected sermon")
+    if cut_end - cut_start < 0.05:
+        raise ValueError("Choose at least 0.05 seconds to cut")
+    if cut_start <= sermon_start and cut_end >= sermon_end:
+        raise ValueError("A cut cannot remove the entire selected sermon")
+
+    artifact_dir = review_job_dir(job_id)
+    audio_path = os.path.join(artifact_dir, "raw_audio.wav")
+    edited_path = os.path.join(artifact_dir, "raw_audio.editing.wav")
+    waveform_path = os.path.join(artifact_dir, "waveform.json")
+    edited_waveform_path = os.path.join(artifact_dir, "waveform.editing.json")
+    try:
+        remove_segment(audio_path, cut_start, cut_end, edited_path)
+        new_duration = get_audio_duration(edited_path)
+        actual_reduction = old_duration - new_duration
+        if actual_reduction <= 0:
+            raise RuntimeError("The selected cut did not shorten the working audio")
+        waveform = _generate_waveform(edited_path, edited_waveform_path)
+        os.replace(edited_path, audio_path)
+        os.replace(edited_waveform_path, waveform_path)
+    finally:
+        for temporary_path in (edited_path, edited_waveform_path):
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+
+    for key in ("sermon_start", "sermon_end", "teaser_start", "teaser_end"):
+        value = normalized.get(key)
+        if value is not None:
+            normalized[key] = _time_after_cut(
+                value, cut_start, cut_end, actual_reduction
+            )
+    teaser_overlapped = (
+        normalized.get("teaser_start") is not None
+        and selections.get("teaser_start") is not None
+        and selections.get("teaser_end") is not None
+        and float(selections["teaser_start"]) < cut_end
+        and float(selections["teaser_end"]) > cut_start
+    )
+    if teaser_overlapped:
+        normalized["teaser_start"] = None
+        normalized["teaser_end"] = None
+
+    transcript = _transcript_after_cut(
+        load_transcript(job_id), cut_start, cut_end, actual_reduction, new_duration
+    )
+    _write_json(os.path.join(artifact_dir, "transcript.json"), transcript)
+
+    review.update(normalized)
+    review["cuts"] = []
+    review["audio_duration"] = new_duration
+    review["manual_teaser"] = normalized["manual_teaser"]
+    review["edit_count"] = int(review.get("edit_count") or 0) + 1
+    review["markers_confirmed"] = False
+    if teaser_overlapped or not normalized["manual_teaser"]:
+        review["teaser_text"] = ""
+    metadata["review"] = review
+    metadata["transcript_summary"] = {
+        "segment_count": len(transcript.get("segments", [])),
+        "word_count": len(transcript.get("words", [])),
+        "duration": new_duration,
+    }
+    return {
+        "review": review,
+        "waveform": waveform,
+        "transcript": transcript,
+        "removed_duration": actual_reduction,
+        "teaser_cleared": teaser_overlapped,
+        "metadata": metadata,
+    }
 
 
 def _convert_upload(local_file: str, raw_audio_path: str, status_callback=None) -> None:
@@ -278,7 +424,10 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
     }
 
 
-def normalize_selections(selections: dict) -> dict:
+def normalize_selections(selections: dict, manual_teaser_default: bool = False) -> dict:
+    manual_teaser = selections.get("manual_teaser", manual_teaser_default)
+    if not isinstance(manual_teaser, bool):
+        raise ValueError("Manual teaser selection must be true or false")
     marker_values = [
         selections.get("sermon_start"), selections.get("sermon_end"),
         selections.get("teaser_start"), selections.get("teaser_end"),
@@ -291,6 +440,7 @@ def normalize_selections(selections: dict) -> dict:
             "sermon_end": float(selections.get("sermon_end")),
             "teaser_start": None,
             "teaser_end": None,
+            "manual_teaser": manual_teaser,
             "cuts": [],
         }
         if selections.get("teaser_start") is not None:
@@ -324,7 +474,9 @@ def normalize_selections(selections: dict) -> dict:
 
 
 def build_preflight(review: dict, selections: dict) -> dict:
-    selections = normalize_selections(selections)
+    selections = normalize_selections(
+        selections, manual_teaser_default=bool(review.get("manual_teaser"))
+    )
     start = selections["sermon_start"]
     end = selections["sermon_end"]
     audio_duration = float(review.get("audio_duration") or 0.0)
@@ -381,7 +533,7 @@ def build_preflight(review: dict, selections: dict) -> dict:
         teaser_start = selections.get("teaser_start")
         teaser_end = selections.get("teaser_end")
         automatic_manual_teaser = (
-            review.get("manual_selection") and not review.get("manual_teaser")
+            review.get("manual_selection") and not selections["manual_teaser"]
         )
         if (teaser_start is None or teaser_end is None) and automatic_manual_teaser:
             pass
@@ -511,7 +663,7 @@ def render_job(job_id: str, metadata: dict, selections: dict,
         if (
             review.get("include_dynamic")
             and review.get("manual_selection")
-            and not review.get("manual_teaser")
+            and not selected["manual_teaser"]
         ):
             if status_callback:
                 status_callback("Transcribing the edited sermon to select a teaser...")

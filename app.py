@@ -18,6 +18,7 @@ from pipeline import feedback
 from pipeline.time_utils import local_now
 from pipeline.review_workflow import (
     analyze_job,
+    apply_working_cut,
     build_preflight,
     create_teaser_preview,
     load_transcript,
@@ -89,7 +90,10 @@ def _validate_processing_requirements(target_duration, include_dynamic,
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed or is not available on PATH")
 
-    needs_transcription = not manual_selection or not manual_teaser
+    # Manual mode does not know whether the user will opt into manual teaser
+    # selection until the editor opens. Defer those service requirements until
+    # render if the editor is left in automatic-teaser mode.
+    needs_transcription = not manual_selection
     if needs_transcription:
         backend = (config.TRANSCRIBE_BACKEND or "openai").strip().lower()
         if backend in {"openai", "cloud"} and not config.OPENAI_API_KEY:
@@ -97,9 +101,7 @@ def _validate_processing_requirements(target_duration, include_dynamic,
         if backend == "local" and not config.WHISPER_LOCAL_URL:
             raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
     needs_automatic_analysis = not sermon_only and not manual_selection
-    needs_automatic_teaser = include_dynamic and (
-        not manual_selection or not manual_teaser
-    )
+    needs_automatic_teaser = include_dynamic and not manual_selection
     if (needs_automatic_analysis or needs_automatic_teaser) and not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is required for sermon or teaser analysis")
 
@@ -167,7 +169,7 @@ def _run_analysis(job: Job):
         )
         db.set_analysis_ready(job.job_id, metadata)
         if job.manual_selection:
-            job.update_status("Audio is ready. Choose the sermon and teaser markers in the editor.")
+            job.update_status("Audio is ready. Edit the sermon and choose any teaser options in the editor.")
         else:
             job.update_status("Analysis complete. Review the sermon and teaser selections.")
     except Exception as e:
@@ -267,8 +269,9 @@ def start_processing():
 
     if manual_selection:
         # Manual sermon selection is a complete broadcast workflow. The teaser
-        # is either marked in the editor or generated after the sermon edit.
+        # choice is made later, inside the editor.
         include_dynamic = True
+        manual_teaser = False
     else:
         manual_teaser = False
 
@@ -401,6 +404,39 @@ def review_preflight(job_id):
     try:
         return jsonify(build_preflight(job["review"], request.get_json() or {}))
     except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/jobs/<job_id>/cut", methods=["POST"])
+def review_cut(job_id):
+    job = db.get_job(job_id)
+    metadata = db.get_metadata(job_id)
+    if not job or not metadata or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    if job["status"] != "awaiting_review":
+        return jsonify({"error": f"Job is currently {job['status']}"}), 409
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+    try:
+        result = apply_working_cut(
+            job_id,
+            metadata,
+            data.get("selections") or {},
+            data.get("cut_start"),
+            data.get("cut_end"),
+        )
+        db.update_metadata(job_id, {
+            "review": result["review"],
+            "transcript_summary": result["metadata"]["transcript_summary"],
+        })
+        return jsonify({
+            "review": result["review"],
+            "waveform": result["waveform"],
+            "removed_duration": result["removed_duration"],
+            "teaser_cleared": result["teaser_cleared"],
+        })
+    except (ValueError, RuntimeError, OSError) as exc:
         return jsonify({"error": str(exc)}), 400
 
 

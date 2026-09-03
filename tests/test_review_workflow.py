@@ -1,7 +1,9 @@
 import math
 import os
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 from pipeline import review_workflow
 
@@ -33,6 +35,73 @@ def test_normalize_selections_rejects_boolean_markers():
         review_workflow.normalize_selections(
             {"sermon_start": True, "sermon_end": 120.0}
         )
+
+
+def test_apply_working_cut_splices_audio_and_remaps_editor_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_workflow.config, "REVIEW_DIR", str(tmp_path))
+    job_id = "20260903_120000_000001"
+    artifact_dir = tmp_path / job_id
+    artifact_dir.mkdir()
+    audio_path = artifact_dir / "raw_audio.wav"
+    sf.write(audio_path, np.full(192000, 0.2), 48000, subtype="PCM_16")
+    review_workflow._write_json(
+        str(artifact_dir / "transcript.json"),
+        {
+            "duration": 4.0,
+            "segments": [
+                {"start": 0.2, "end": 0.8, "text": "before"},
+                {"start": 1.1, "end": 1.4, "text": "remove"},
+                {"start": 2.0, "end": 2.5, "text": "after"},
+            ],
+            "words": [],
+        },
+    )
+    metadata = {
+        "review": {
+            "audio_duration": 4.0,
+            "sermon_start": 0.2,
+            "sermon_end": 3.8,
+            "manual_selection": True,
+            "manual_teaser": True,
+        }
+    }
+
+    result = review_workflow.apply_working_cut(
+        job_id,
+        metadata,
+        {
+            "sermon_start": 0.2,
+            "sermon_end": 3.8,
+            "teaser_start": 2.0,
+            "teaser_end": 2.4,
+            "manual_teaser": True,
+        },
+        1.0,
+        1.5,
+    )
+
+    assert result["review"]["audio_duration"] == pytest.approx(3.45, abs=0.002)
+    assert result["review"]["sermon_end"] == pytest.approx(3.25, abs=0.002)
+    assert result["review"]["teaser_start"] == pytest.approx(1.45, abs=0.002)
+    assert result["review"]["edit_count"] == 1
+    assert [segment["text"] for segment in result["transcript"]["segments"]] == ["before", "after"]
+    assert sf.info(audio_path).duration == pytest.approx(3.45, abs=0.002)
+
+    second = review_workflow.apply_working_cut(
+        job_id,
+        result["metadata"],
+        {
+            "sermon_start": result["review"]["sermon_start"],
+            "sermon_end": result["review"]["sermon_end"],
+            "teaser_start": result["review"]["teaser_start"],
+            "teaser_end": result["review"]["teaser_end"],
+            "manual_teaser": True,
+        },
+        0.5,
+        0.7,
+    )
+    assert second["review"]["audio_duration"] == pytest.approx(3.2, abs=0.002)
+    assert second["review"]["edit_count"] == 2
 
 
 def test_preflight_accepts_exact_target():
@@ -168,6 +237,37 @@ def test_manual_mode_can_defer_teaser_selection_until_render():
 
     assert result["ready"] is True
     assert result["teaser_duration"] is None
+
+
+def test_editor_manual_teaser_toggle_requires_visible_teaser_markers():
+    review = {
+        "audio_duration": 100.0,
+        "sermon_target_seconds": 90.0,
+        "include_dynamic": True,
+        "manual_selection": True,
+        "manual_teaser": False,
+        "teaser_window_seconds": 23.0,
+    }
+
+    automatic = review_workflow.build_preflight(
+        review,
+        {
+            "sermon_start": 5.0,
+            "sermon_end": 95.0,
+            "manual_teaser": False,
+        },
+    )
+    manual = review_workflow.build_preflight(
+        review,
+        {
+            "sermon_start": 5.0,
+            "sermon_end": 95.0,
+            "manual_teaser": True,
+        },
+    )
+
+    assert automatic["ready"] is True
+    assert any("Select a teaser" in blocker for blocker in manual["blockers"])
 
 
 def test_manual_render_generates_teaser_and_assembles_broadcast(tmp_path, monkeypatch):
