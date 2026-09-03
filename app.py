@@ -236,7 +236,7 @@ def start_processing():
         if request.content_type and "multipart" in request.content_type:
             file = request.files.get("file")
             youtube_url = str(request.form.get("url", "") or "").strip()
-            include_dynamic = _as_bool(request.form.get("include_bumpers_dynamic"), True)
+            include_dynamic = _as_bool(request.form.get("include_bumpers_dynamic"), False)
             include_stock = _as_bool(request.form.get("include_bumpers_stock"), False)
             sermon_only = _as_bool(request.form.get("sermon_only"), False)
             manual_selection = _as_bool(request.form.get("manual_selection"), False)
@@ -246,7 +246,7 @@ def start_processing():
             if not isinstance(data, dict):
                 raise ValueError("Request body must be a JSON object")
             youtube_url = str(data.get("url", "") or "").strip()
-            include_dynamic = _as_bool(data.get("include_bumpers_dynamic"), True)
+            include_dynamic = _as_bool(data.get("include_bumpers_dynamic"), False)
             include_stock = _as_bool(data.get("include_bumpers_stock"), False)
             sermon_only = _as_bool(data.get("sermon_only"), False)
             manual_selection = _as_bool(data.get("manual_selection"), False)
@@ -270,6 +270,8 @@ def start_processing():
         return jsonify({"error": "That audio/video file type is not supported"}), 400
     if not has_upload and not _is_youtube_url(youtube_url):
         return jsonify({"error": "Please provide a valid YouTube URL"}), 400
+    if not any((include_dynamic, include_stock, sermon_only, manual_selection)):
+        return jsonify({"error": "Select at least one broadcast or editing option"}), 400
 
     try:
         parse_duration(target_duration)

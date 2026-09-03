@@ -159,9 +159,9 @@
                 <input type="file" id="fileInput" accept=".mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.flac,.ogg">
             </div>
             <div>
-                <label>Finished files</label>
+                <label>Choose at least one option</label>
                 <label class="choice">
-                    <input type="checkbox" id="dynamicCheckbox" checked>
+                    <input type="checkbox" id="dynamicCheckbox">
                     <span><strong>Radio broadcast with my teaser</strong><small>Intro + selected teaser + sermon + outro</small></span>
                 </label>
                 <label class="choice">
@@ -179,12 +179,12 @@
                 <div class="row">
                     <div class="field">
                         <label for="durationInput">Final broadcast duration</label>
-                        <input type="text" id="durationInput" value="{{ default_broadcast_duration }}" placeholder="29:30">
+                        <input type="text" id="durationInput" value="{{ default_duration }}" placeholder="27:18">
                     </div>
                 </div>
             </div>
         </div>
-        <button class="primary" id="analyzeBtn">Analyze recording</button>
+        <button class="primary" id="analyzeBtn" disabled>Analyze recording</button>
     </section>
 
     <section class="panel hidden" id="statusPanel" aria-live="polite">
@@ -344,8 +344,12 @@
         $('statusLog').scrollTop = $('statusLog').scrollHeight;
     }
 
-    $('dynamicCheckbox').addEventListener('change', syncDurationDefault);
-    $('stockCheckbox').addEventListener('change', syncDurationDefault);
+    const workflowCheckboxes = [
+        $('dynamicCheckbox'), $('stockCheckbox'),
+        $('manualSelectionCheckbox'), $('sermonOnlyCheckbox'),
+    ];
+    $('dynamicCheckbox').addEventListener('change', () => { syncDurationDefault(); syncAnalyzeAvailability(); });
+    $('stockCheckbox').addEventListener('change', () => { syncDurationDefault(); syncAnalyzeAvailability(); });
     $('manualSelectionCheckbox').addEventListener('change', () => {
         if ($('manualSelectionCheckbox').checked) $('sermonOnlyCheckbox').checked = false;
         syncSourceMode();
@@ -359,7 +363,14 @@
     }
     function syncSourceMode() {
         $('analyzeBtn').textContent = $('manualSelectionCheckbox').checked ? 'Open manual editor' : 'Analyze recording';
+        syncAnalyzeAvailability();
     }
+    function syncAnalyzeAvailability() {
+        $('analyzeBtn').disabled = !workflowCheckboxes.some(checkbox => checkbox.checked);
+    }
+    workflowCheckboxes.forEach(checkbox => { checkbox.checked = false; });
+    syncDurationDefault();
+    syncSourceMode();
 
     $('analyzeBtn').addEventListener('click', async () => {
         const url = $('urlInput').value.trim(); const file = $('fileInput').files[0];
@@ -384,7 +395,7 @@
             const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Analysis could not be started.');
             state.jobId = data.job_id; $('newSessionLink').classList.remove('hidden'); history.replaceState(null, '', `/?job=${encodeURIComponent(state.jobId)}`); pollJob();
         } catch (error) {
-            $('sourcePanel').classList.remove('hidden'); $('analyzeBtn').disabled = false; setStatus('Could not start analysis', 'Error', 'error'); $('statusLog').textContent = error.message;
+            $('sourcePanel').classList.remove('hidden'); syncAnalyzeAvailability(); setStatus('Could not start analysis', 'Error', 'error'); $('statusLog').textContent = error.message;
         }
     });
 

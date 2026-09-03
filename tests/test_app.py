@@ -47,6 +47,8 @@ def test_basic_pages_and_health_render(client):
     assert 'id="newSessionLink"' in index_html
     assert 'id="manualSelectionCheckbox"' in index_html
     assert "I’ll select the sermon manually" in index_html
+    assert 'id="dynamicCheckbox">' in index_html
+    assert 'id="analyzeBtn" disabled' in index_html
 
     history = client.get("/history")
     assert history.status_code == 200
@@ -112,6 +114,37 @@ def test_invalid_requests_fail_before_processing(client):
         data={"file": (io.BytesIO(b"not media"), "payload.exe")},
         content_type="multipart/form-data",
     ).status_code == 400
+
+
+def test_request_requires_a_selected_workflow_option(client):
+    response = client.post(
+        "/api/analyze",
+        json={
+            "url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "include_bumpers_dynamic": False,
+            "include_bumpers_stock": False,
+            "sermon_only": False,
+            "manual_selection": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Select at least one" in response.get_json()["error"]
+
+
+def test_missing_media_error_takes_priority_over_option_error(client):
+    response = client.post(
+        "/api/analyze",
+        json={
+            "include_bumpers_dynamic": False,
+            "include_bumpers_stock": False,
+            "sermon_only": False,
+            "manual_selection": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "YouTube URL or upload a file" in response.get_json()["error"]
 
 
 def test_valid_request_is_persisted_and_queued(client, app_module, monkeypatch):
