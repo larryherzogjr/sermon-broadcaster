@@ -134,6 +134,7 @@
             header { align-items: flex-start; }
         }
     </style>
+    <link rel="stylesheet" href="/static/ui.css">
 </head>
 <body>
 <div class="shell">
@@ -157,40 +158,32 @@
     <section class="panel" id="sourcePanel">
         <h2>Start a broadcast</h2>
         <p class="panel-intro">Add the service recording. Analysis prepares a transcript and suggested markers; nothing is cut until you review them.</p>
+        <fieldset class="setup-section">
+            <legend>1. Recording</legend>
+            <div class="source-grid">
+                <div><label for="urlInput">YouTube link</label><input type="text" id="urlInput" placeholder="Paste a YouTube link"></div>
+                <div><label for="fileInput">Or upload video or audio</label><input type="file" id="fileInput" accept=".mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.flac,.ogg"></div>
+            </div>
+            <p class="helper">Choose one source. Your original recording is preserved.</p>
+        </fieldset>
         <div class="source-grid">
-            <div>
-                <label for="urlInput">YouTube URL</label>
-                <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">
-                <div class="divider">or</div>
-                <label for="fileInput">Upload video or audio</label>
-                <input type="file" id="fileInput" accept=".mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.flac,.ogg">
-            </div>
-            <div>
-                <label>Choose at least one option</label>
-                <label class="choice">
-                    <input type="checkbox" id="dynamicCheckbox">
-                    <span><strong>Radio broadcast with my teaser</strong><small>Intro + selected teaser + sermon + outro</small></span>
-                </label>
-                <label class="choice">
-                    <input type="checkbox" id="stockCheckbox" {% if not stock_available %}disabled{% endif %}>
-                    <span><strong>Also create the stock-teaser version</strong><small>{% if stock_available %}Uses the existing pre-mixed intro{% else %}Unavailable until assets/intro_stock.mp3 is installed{% endif %}</small></span>
-                </label>
-                <label class="choice">
-                    <input type="checkbox" id="manualSelectionCheckbox">
-                    <span><strong>I’ll select the sermon manually</strong><small>Pull audio from YouTube or an uploaded recording, crop it in the editor, then create the complete broadcast.</small></span>
-                </label>
-                <label class="choice">
-                    <input type="checkbox" id="sermonOnlyCheckbox">
-                    <span><strong>The uploaded file is already sermon-only</strong><small>Use the whole file as the initial sermon selection</small></span>
-                </label>
-                <div class="row">
-                    <div class="field">
-                        <label for="durationInput">Final broadcast duration</label>
-                        <input type="text" id="durationInput" value="{{ default_duration }}" placeholder="27:18">
-                    </div>
-                </div>
-            </div>
+            <fieldset class="setup-section">
+                <legend>2. Sermon selection</legend>
+                <label class="choice"><input type="radio" name="selectionMode" id="automaticSelection" checked><span><strong>Find the sermon for me</strong><small>Review suggested boundaries and a transcript.</small></span></label>
+                <label class="choice"><input type="radio" name="selectionMode" id="manualSelectionCheckbox"><span><strong>I’ll select it manually</strong><small>Open the waveform and choose the sermon yourself.</small></span></label>
+                <label class="choice"><input type="radio" name="selectionMode" id="sermonOnlyCheckbox"><span><strong>The recording is already sermon-only</strong><small>Start with the entire recording selected.</small></span></label>
+            </fieldset>
+            <fieldset class="setup-section">
+                <legend>3. Broadcast versions</legend>
+                <label class="choice"><input type="checkbox" id="dynamicCheckbox" checked><span><strong>Broadcast with a selected teaser</strong><small>Intro, a clip from this sermon, and outro.</small></span></label>
+                <label class="choice"><input type="checkbox" id="stockCheckbox" {% if not stock_available %}disabled{% endif %}><span><strong>Broadcast with the stock teaser</strong><small>{% if stock_available %}Uses your existing pre-mixed intro.{% else %}No stock intro has been configured.{% endif %}</small></span></label>
+                <p class="helper" id="versionHelp">Choose one or both versions.</p>
+                <label for="durationInput" id="durationLabel">Final broadcast duration</label>
+                <input type="text" id="durationInput" value="{{ default_broadcast_duration }}" placeholder="29:30" aria-describedby="durationHelp">
+                <p class="helper" id="durationHelp">Minutes:seconds, including intro and outro.</p>
+            </fieldset>
         </div>
+        <div id="sourceError" class="notice error hidden" role="alert"></div>
         <button class="primary" id="analyzeBtn" disabled>Analyze recording</button>
     </section>
 
@@ -199,7 +192,7 @@
             <h2 id="statusTitle">Analyzing recording</h2>
             <span class="badge" id="statusBadge">Working</span>
         </div>
-        <div class="status-log" id="statusLog"></div>
+        <ol class="processing-stages" id="processingStages"><li>Prepare recording</li><li>Analyze &amp; select</li><li>Review</li><li>Create broadcast</li></ol><p id="processingMessage">Preparing your recording…</p><details><summary>Processing details</summary><div class="status-log" id="statusLog"></div></details>
     </section>
 
     <section class="hidden" id="editorPanel">
@@ -212,14 +205,14 @@
                 <span class="badge ready">Awaiting review</span>
             </div>
 
-            <audio id="sourceAudio" controls preload="metadata"></audio>
+            <audio id="sourceAudio" preload="metadata"></audio>
             <div class="transport">
                 <span>Click to seek. Drag a colored marker for a precise crop.</span>
                 <span class="time"><span id="currentTime">0:00.0</span> / <span id="totalTime">0:00</span></span>
             </div>
             <div class="edit-transport">
                 <button class="secondary" id="backTenBtn" type="button">−10s</button>
-                <button class="secondary" id="playPauseBtn" type="button">Play / pause</button>
+                <button class="secondary" id="playPauseBtn" type="button">Play</button>
                 <button class="secondary" id="forwardTenBtn" type="button">+10s</button>
                 <button class="secondary" id="playSelectionBtn" type="button">Play selected sermon</button>
                 <label for="playbackRate">Speed</label>
@@ -231,7 +224,8 @@
                     <option value="2">2×</option>
                 </select>
             </div>
-            <div class="wave-wrap"><canvas id="waveform" height="150" aria-label="Audio waveform timeline"></canvas></div>
+            <div class="wave-wrap"><canvas id="waveform" height="150" aria-label="Audio waveform timeline; use the time fields below for keyboard editing"></canvas></div>
+            <div class="edit-transport"><label for="waveZoom">Zoom</label><select id="waveZoom"><option value="1">Full recording</option><option value="4">4×</option><option value="16">16×</option><option value="64">64×</option></select><label for="wavePosition">Timeline position</label><input id="wavePosition" type="range" min="0" max="1000" value="0" aria-label="Timeline position"><button class="small-btn" id="followPlayhead">Show playhead</button></div>
             <div class="wave-legend"><span><i class="key sermon"></i>Sermon</span><span><i class="key teaser"></i>Teaser</span><span><i class="key cut"></i>Cut</span></div>
 
             <label class="choice hidden" id="manualTeaserEditorChoice">
@@ -240,8 +234,8 @@
             </label>
             <div class="marker-grid">
                 <div class="marker-group">
-                    <h3>Sermon boundaries</h3>
-                    <div class="marker-row">
+                    <h3>Sermon boundaries</h3><div class="preview-row"><button class="secondary" id="previewStartBtn">Listen to opening</button><button class="secondary" id="previewEndBtn">Listen to ending</button></div>
+                    <details class="precision-tools"><summary>Adjust exact times</summary><div class="marker-row">
                         <span class="name">Start</span><input class="value" id="sermonStartValue" data-marker-input="sermon_start" aria-label="Sermon start time">
                         <span class="marker-controls"><button class="small-btn" data-nudge="sermon_start:-1">−1s</button><button class="marker-btn" data-set="sermon_start">Set at playhead</button><button class="small-btn" data-nudge="sermon_start:1">+1s</button></span>
                     </div>
@@ -249,10 +243,11 @@
                         <span class="name">End</span><input class="value" id="sermonEndValue" data-marker-input="sermon_end" aria-label="Sermon end time">
                         <span class="marker-controls"><button class="small-btn" data-nudge="sermon_end:-1">−1s</button><button class="marker-btn" data-set="sermon_end">Set at playhead</button><button class="small-btn" data-nudge="sermon_end:1">+1s</button></span>
                     </div>
+                    </details>
                 </div>
                 <div class="marker-group teaser hidden" id="teaserMarkers">
-                    <h3>Teaser boundaries</h3>
-                    <div class="marker-row">
+                    <h3>Teaser boundaries</h3><div class="preview-row"><button class="secondary" id="previewTeaserBtn">Listen to teaser</button><button class="secondary" id="previewIntroBtn">Preview teaser in intro</button></div>
+                    <details class="precision-tools"><summary>Adjust exact times</summary><div class="marker-row">
                         <span class="name">Start</span><input class="value" id="teaserStartValue" data-marker-input="teaser_start" aria-label="Teaser start time">
                         <span class="marker-controls"><button class="small-btn" data-nudge="teaser_start:-1">−1s</button><button class="marker-btn" data-set="teaser_start">Set at playhead</button><button class="small-btn" data-nudge="teaser_start:1">+1s</button></span>
                     </div>
@@ -260,18 +255,15 @@
                         <span class="name">End</span><input class="value" id="teaserEndValue" data-marker-input="teaser_end" aria-label="Teaser end time">
                         <span class="marker-controls"><button class="small-btn" data-nudge="teaser_end:-1">−1s</button><button class="marker-btn" data-set="teaser_end">Set at playhead</button><button class="small-btn" data-nudge="teaser_end:1">+1s</button></span>
                     </div>
+                    </details>
                 </div>
             </div>
             <div class="marker-group cuts-panel">
-                <h3>Cut audio</h3>
-                <p class="panel-intro">Enable the cut tool, set a range, then press Cut. The range is removed immediately and the shortened audio is ready for another edit.</p>
+                <h3>Cut audio</h3><button class="secondary" id="undoCutBtn" disabled>Undo last cut</button>
+                <p class="panel-intro">Enable the cut tool, set a range, then press Cut. The range is removed immediately. You can undo the most recent cut, even after reopening this review.</p>
                 <div id="cutModules"></div>
             </div>
             <div class="preview-row">
-                <button class="secondary" id="previewStartBtn">Preview sermon start</button>
-                <button class="secondary" id="previewEndBtn">Preview sermon ending</button>
-                <button class="secondary" id="previewTeaserBtn">Preview teaser</button>
-                <button class="secondary" id="previewIntroBtn">Preview teaser in intro</button>
             </div>
             <audio id="previewAudio" class="hidden" controls></audio>
         </div>
@@ -292,7 +284,7 @@
                     <div class="metric"><div class="metric-label">Teaser</div><div class="metric-value" id="teaserDuration">—</div></div>
                     <div class="metric"><div class="metric-label">Cuts applied</div><div class="metric-value" id="editCount">0</div></div>
                 </div>
-                <div id="preflightNotices"></div>
+                <p id="fitExplanation"></p><div id="broadcastBreakdown" class="helper"></div><div id="preflightNotices" aria-live="polite"></div>
                 <label class="choice" style="margin-top:.8rem">
                     <input type="checkbox" id="reviewConfirmed">
                     <span><strong>I listened to these selections</strong><small id="confirmationHelp">I checked the sermon opening, ending, and teaser.</small></span>
@@ -306,7 +298,7 @@
         <h2>Broadcast ready</h2>
         <p class="panel-intro" id="finishSummary">The selected sermon and teaser have been assembled and checked.</p>
         <div class="metrics" id="finishMetrics"></div>
-        <div class="finish-actions" id="downloadButtons"></div>
+        <div id="finishedPlayers"></div><div class="finish-actions" id="downloadButtons"></div>
         <button class="secondary" style="margin-top:1rem" onclick="window.location.href='/'">Start another broadcast</button>
     </section>
 </div>
@@ -314,7 +306,7 @@
 <script>
     const DEFAULT_SERMON_DURATION = '{{ default_duration }}';
     const DEFAULT_BROADCAST_DURATION = '{{ default_broadcast_duration }}';
-    const state = { jobId: null, review: null, transcript: null, waveform: null, markers: {}, cut: {enabled:false,start:null,end:null}, manualTeaser: false, poll: null, previewStop: null, preflightTimer: null, preflightReady: false };
+    const state = { jobId: null, review: null, transcript: null, waveform: null, markers: {}, cut: {enabled:false,start:null,end:null}, manualTeaser: false, poll: null, previewStop: null, preflightTimer: null, preflightReady: false, editBusy: false };
 
     const $ = id => document.getElementById(id);
     const esc = value => { const d = document.createElement('div'); d.textContent = value == null ? '' : String(value); return d.innerHTML; };
@@ -373,57 +365,39 @@
     function renderLog(messages = []) {
         $('statusLog').innerHTML = messages.map(m => `<div class="log-line"><span class="time">${esc(m.time)}</span>${esc(m.text)}</div>`).join('');
         $('statusLog').scrollTop = $('statusLog').scrollHeight;
+        $('processingMessage').textContent = messages.length ? messages[messages.length - 1].text : 'Preparing your recording…';
     }
 
-    const workflowCheckboxes = [
-        $('dynamicCheckbox'), $('stockCheckbox'),
-        $('manualSelectionCheckbox'), $('sermonOnlyCheckbox'),
-    ];
-    $('dynamicCheckbox').addEventListener('change', () => {
-        if ($('manualSelectionCheckbox').checked && !$('dynamicCheckbox').checked) {
-            $('dynamicCheckbox').checked = true;
-        }
-        syncDurationDefault(); syncAnalyzeAvailability();
-    });
-    $('stockCheckbox').addEventListener('change', () => { syncDurationDefault(); syncAnalyzeAvailability(); });
-    $('manualSelectionCheckbox').addEventListener('change', () => {
-        if ($('manualSelectionCheckbox').checked) {
-            $('sermonOnlyCheckbox').checked = false;
-            $('dynamicCheckbox').checked = true;
-        } else {
-            $('dynamicCheckbox').checked = false;
-        }
-        $('dynamicCheckbox').disabled = $('manualSelectionCheckbox').checked;
-        syncDurationDefault();
-        syncSourceMode();
-    });
-    $('sermonOnlyCheckbox').addEventListener('change', () => {
-        if ($('sermonOnlyCheckbox').checked && $('manualSelectionCheckbox').checked) {
-            $('manualSelectionCheckbox').checked = false;
-            $('dynamicCheckbox').checked = false;
-            syncDurationDefault();
-        }
-        $('dynamicCheckbox').disabled = false;
-        syncSourceMode();
-    });
+    let durationEdited = false;
+    $('durationInput').addEventListener('input', () => { durationEdited = true; });
     function syncDurationDefault() {
-        $('durationInput').value = ($('dynamicCheckbox').checked || $('stockCheckbox').checked) ? DEFAULT_BROADCAST_DURATION : DEFAULT_SERMON_DURATION;
-    }
-    function syncSourceMode() {
-        $('analyzeBtn').textContent = $('manualSelectionCheckbox').checked ? 'Open manual editor' : 'Analyze recording';
-        syncAnalyzeAvailability();
+        const bumpers = $('dynamicCheckbox').checked || $('stockCheckbox').checked;
+        if (!durationEdited) $('durationInput').value = bumpers ? DEFAULT_BROADCAST_DURATION : DEFAULT_SERMON_DURATION;
+        $('durationLabel').textContent = bumpers ? 'Final broadcast duration' : 'Final sermon duration';
+        $('durationHelp').textContent = bumpers ? 'Minutes:seconds, including intro and outro.' : 'Minutes:seconds of sermon audio.';
     }
     function syncAnalyzeAvailability() {
-        $('analyzeBtn').disabled = !workflowCheckboxes.some(checkbox => checkbox.checked);
+        const source = Boolean($('urlInput').value.trim() || $('fileInput').files.length);
+        const version = $('dynamicCheckbox').checked || $('stockCheckbox').checked || $('sermonOnlyCheckbox').checked;
+        $('analyzeBtn').disabled = !source || !version;
     }
-    workflowCheckboxes.forEach(checkbox => { checkbox.checked = false; });
-    $('dynamicCheckbox').disabled = false;
-    syncDurationDefault();
+    function syncSourceMode() {
+        const manual = $('manualSelectionCheckbox').checked;
+        if (manual) $('dynamicCheckbox').checked = true;
+        $('dynamicCheckbox').disabled = manual;
+        $('versionHelp').textContent = manual ? 'Manual editing includes the selected-teaser broadcast.' : $('sermonOnlyCheckbox').checked ? 'Leave both unchecked for sermon audio without intro or outro.' : 'Choose one or both versions.';
+        $('analyzeBtn').textContent = manual ? 'Open manual editor' : 'Analyze recording';
+        syncDurationDefault(); syncAnalyzeAvailability();
+    }
+    document.querySelectorAll('[name="selectionMode"], #dynamicCheckbox, #stockCheckbox').forEach(input => input.addEventListener('change', syncSourceMode));
+    $('urlInput').addEventListener('input', syncAnalyzeAvailability);
+    $('fileInput').addEventListener('change', syncAnalyzeAvailability);
     syncSourceMode();
 
     $('analyzeBtn').addEventListener('click', async () => {
         const url = $('urlInput').value.trim(); const file = $('fileInput').files[0];
-        if (!url && !file) { alert('Add a YouTube URL or choose a file.'); return; }
+        $('sourceError').classList.add('hidden');
+        if ((!url && !file) || (url && file)) { $('sourceError').textContent = 'Choose one source: a YouTube link or an uploaded file.'; $('sourceError').classList.remove('hidden'); return; }
         const manualSelection = $('manualSelectionCheckbox').checked;
         $('analyzeBtn').disabled = true; $('sourcePanel').classList.add('hidden'); setStatus(manualSelection ? 'Preparing the manual editor' : 'Preparing the review editor', manualSelection ? 'Extracting audio' : 'Analyzing');
         try {
@@ -453,6 +427,8 @@
         try {
             const response = await fetch(`/api/status/${encodeURIComponent(state.jobId)}`); const job = await response.json();
             if (!response.ok) throw new Error(job.error || 'Job not found'); renderLog(job.messages);
+            const stage = {queued:0, analyzing:1, running:1, awaiting_review:2, rendering:3, complete:4}[job.status] ?? 0;
+            document.querySelectorAll('#processingStages li').forEach((el,i) => { el.classList.toggle('current', i === stage); el.classList.toggle('done', i < stage); });
             if (job.status === 'awaiting_review') {
                 if (job.error) setStatus('Render needs an adjustment', 'Review', 'error'); else $('statusPanel').classList.add('hidden');
                 try { await loadEditor(job); }
@@ -528,10 +504,12 @@
     }
 
     function updateMarkers() {
+        $('reviewConfirmed').checked = false;
         $('sermonStartValue').value = fmt(state.markers.sermon_start, true); $('sermonEndValue').value = fmt(state.markers.sermon_end, true);
         $('teaserStartValue').value = state.markers.teaser_start == null ? '' : fmt(state.markers.teaser_start, true); $('teaserEndValue').value = state.markers.teaser_end == null ? '' : fmt(state.markers.teaser_end, true);
         const teaserReady = state.markers.teaser_start != null && state.markers.teaser_end != null;
         $('previewTeaserBtn').disabled = !teaserReady; $('previewIntroBtn').disabled = !teaserReady;
+        $('undoCutBtn').disabled = !state.review?.undo_available;
         $('cutToolCheckbox').checked = state.cut.enabled;
         $('cutControls').classList.toggle('hidden', !state.cut.enabled);
         $('cutStartValue').value = state.cut.start == null ? '' : fmt(state.cut.start, true);
@@ -609,7 +587,7 @@
     $('previewCutBtn').onclick=()=>{ if(state.cut.start!=null&&state.cut.end!=null) playSource(state.cut.start,state.cut.end); };
     $('applyCutBtn').onclick=async()=>{
         const button=$('applyCutBtn'); const cutStart=state.cut.start; const cutEnd=state.cut.end;
-        button.disabled=true; button.textContent='Cutting…'; $('sourceAudio').pause();
+        state.editBusy=true; $('editorPanel').inert=true; syncRenderAvailability(); button.disabled=true; $('undoCutBtn').disabled=true; button.textContent='Cutting…'; $('sourceAudio').pause();
         try {
             const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/cut`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selections:selectionPayload(),cut_start:cutStart,cut_end:cutEnd})});
             const data=await response.json(); if(!response.ok) throw new Error(data.error||'The cut could not be applied.');
@@ -623,30 +601,53 @@
             audio.addEventListener('loadedmetadata',()=>{ audio.currentTime=Math.min(cutStart,state.review.audio_duration); },{once:true});
             $('totalTime').textContent=fmt(state.review.audio_duration); syncManualTeaserEditor();
         } catch(error) { alert(error.message); updateMarkers(); }
-        finally { button.textContent='Cut'; }
+        finally { state.editBusy=false; $('editorPanel').inert=false; button.textContent='Cut'; updateMarkers(); }
     };
 
     function drawWaveform() {
         if (!state.waveform) return; const canvas = $('waveform'); const box = canvas.getBoundingClientRect(); const ratio = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.floor(box.width * ratio)); canvas.height = Math.floor(150 * ratio); const ctx = canvas.getContext('2d'); ctx.scale(ratio, ratio);
-        const w = box.width, h = 150, duration = state.review.audio_duration || 1; ctx.clearRect(0,0,w,h); ctx.fillStyle = '#111115'; ctx.fillRect(0,0,w,h);
-        const region = (start,end,color) => { if (start == null || end == null) return; ctx.fillStyle=color; ctx.fillRect(start/duration*w,0,Math.max(1,(end-start)/duration*w),h); };
+        canvas.width = Math.max(1, Math.floor(box.width * ratio)); canvas.height = Math.floor(180 * ratio); const ctx = canvas.getContext('2d'); ctx.scale(ratio, ratio);
+        const w = box.width, h = 180, duration = viewSpan();
+        viewStart = Math.min(viewStart, Math.max(0,state.review.audio_duration-duration));
+        const xFor = value => (value-viewStart)/duration*w;
+        $('wavePosition').value = String(viewStart/Math.max(1,state.review.audio_duration-duration)*1000); ctx.clearRect(0,0,w,h); ctx.fillStyle = '#111115'; ctx.fillRect(0,0,w,h);
+        const region = (start,end,color) => { if (start == null || end == null) return; ctx.fillStyle=color; ctx.fillRect(xFor(start),0,Math.max(1,(end-start)/duration*w),h); };
         region(state.markers.sermon_start,state.markers.sermon_end,'rgba(98,167,117,.20)'); region(state.markers.teaser_start,state.markers.teaser_end,'rgba(209,179,90,.32)');
         if(state.cut.enabled) region(state.cut.start,state.cut.end,'rgba(197,101,101,.38)');
-        const peaks = state.waveform.peaks || []; ctx.strokeStyle = '#a9a6a0'; ctx.lineWidth = 1; ctx.beginPath(); peaks.forEach((peak,i) => { const x=i/Math.max(1,peaks.length-1)*w; const amp=Math.max(1,peak*h*.43); ctx.moveTo(x,h/2-amp); ctx.lineTo(x,h/2+amp); }); ctx.stroke();
-        const marker = (value,color,atTop) => { if (value == null) return; const x=value/duration*w; ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); ctx.beginPath(); ctx.arc(x,atTop?8:h-8,6,0,Math.PI*2); ctx.fill(); };
-        marker(state.markers.sermon_start,'#62a775',true); marker(state.markers.sermon_end,'#62a775',false); marker(state.markers.teaser_start,'#d1b35a',true); marker(state.markers.teaser_end,'#d1b35a',false);
-        if(state.cut.enabled){ marker(state.cut.start,'#c56565',true); marker(state.cut.end,'#c56565',false); }
-        const playhead = ($('sourceAudio').currentTime || 0)/duration*w; ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(playhead,0); ctx.lineTo(playhead,h); ctx.stroke();
+        const peaks = state.waveform.peaks || []; ctx.strokeStyle = '#a9a6a0'; ctx.lineWidth = 1; ctx.beginPath(); peaks.forEach((peak,i) => { const x=xFor(i/Math.max(1,peaks.length-1)*state.review.audio_duration); if(x<0||x>w)return; const amp=Math.max(1,peak*h*.28); ctx.moveTo(x,h/2-amp); ctx.lineTo(x,h/2+amp); }); ctx.stroke();
+        const marker = (value,color,atTop,label) => { if (value == null) return; const x=xFor(value); if(x<0||x>w)return; ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); ctx.beginPath(); ctx.arc(x,atTop?8:h-8,6,0,Math.PI*2); ctx.fill(); ctx.font="11px system-ui"; const lane = label.startsWith('Teaser') ? 16 : label.startsWith('Cut') ? 32 : 0; ctx.fillText(label,Math.max(4,Math.min(w-90,x+9)),atTop?22+lane:h-30-lane); };
+        marker(state.markers.sermon_start,'#62a775',true,'Sermon start'); marker(state.markers.sermon_end,'#62a775',false,'Sermon end'); marker(state.markers.teaser_start,'#d1b35a',true,'Teaser start'); marker(state.markers.teaser_end,'#d1b35a',false,'Teaser end');
+        if(state.cut.enabled){ marker(state.cut.start,'#c56565',true,'Cut start'); marker(state.cut.end,'#c56565',false,'Cut end'); }
+        ctx.font='11px ui-monospace'; ctx.fillStyle='#aaa69d'; for(let i=0;i<=4;i++){const x=i*w/4; ctx.textAlign=i===0?'left':i===4?'right':'center'; ctx.fillText(fmt(viewStart+i*duration/4),i===0?4:i===4?w-4:x,h-5); ctx.textAlign='left'; ctx.strokeStyle='#3d3d48'; ctx.beginPath(); ctx.moveTo(x,h-22); ctx.lineTo(x,h-17); ctx.stroke();}
+        const playhead = xFor($('sourceAudio').currentTime || 0); ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(playhead,0); ctx.lineTo(playhead,h); ctx.stroke();
     }
     let draggedMarker = null;
-    const waveformTime = event => { const rect=$('waveform').getBoundingClientRect(); return Math.max(0,Math.min(state.review.audio_duration,((event.clientX-rect.left)/rect.width)*state.review.audio_duration)); };
+    let viewStart = 0;
+    const viewSpan = () => (state.review?.audio_duration || 1) / Number($('waveZoom').value);
+    function positionWave(at) { viewStart = Math.max(0, Math.min((state.review?.audio_duration || 1)-viewSpan(), at)); drawWaveform(); }
+    $('waveZoom').onchange = () => positionWave(($('sourceAudio').currentTime || 0)-viewSpan()/2);
+    $('wavePosition').oninput = () => positionWave(Number($('wavePosition').value)/1000*((state.review?.audio_duration || 1)-viewSpan()));
+    $('followPlayhead').onclick = () => positionWave(($('sourceAudio').currentTime || 0)-viewSpan()/2);
+    $('sourceAudio').addEventListener('play', () => { $('playPauseBtn').textContent='Pause'; });
+    $('sourceAudio').addEventListener('pause', () => { $('playPauseBtn').textContent='Play'; });
+    document.querySelectorAll('.precision-tools').forEach(el => el.addEventListener('toggle', drawWaveform));
+    $('undoCutBtn').onclick = async () => {
+        state.editBusy=true; $('editorPanel').inert=true; syncRenderAvailability(); $('undoCutBtn').disabled = true; $('applyCutBtn').disabled = true; $('sourceAudio').pause();
+        try {
+            const response = await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/undo-cut`, {method:'POST'});
+            const data = await readJsonResponse(response, 'Undo');
+            await loadEditor({review:data.review});
+            $('sourceAudio').src = `/api/jobs/${encodeURIComponent(state.jobId)}/audio?v=${Date.now()}`;
+        } catch(error) { alert(error.message); }
+        finally { state.editBusy=false; $('editorPanel').inert=false; updateMarkers(); }
+    };
+    const waveformTime = event => { const rect=$('waveform').getBoundingClientRect(); return Math.max(0,Math.min(state.review.audio_duration,viewStart+((event.clientX-rect.left)/rect.width)*viewSpan())); };
     $('waveform').addEventListener('pointerdown', event => {
         const rect=event.currentTarget.getBoundingClientRect(); const x=event.clientX-rect.left;
         const keys=['sermon_start','sermon_end',...(state.review.include_dynamic&&(!state.review.manual_selection||state.manualTeaser)?['teaser_start','teaser_end']:[])].filter(key=>state.markers[key]!=null);
         const candidates=keys.map(key=>({kind:'marker',key,value:state.markers[key]}));
         if(state.cut.enabled){ candidates.push({kind:'cut',edge:'start',value:state.cut.start},{kind:'cut',edge:'end',value:state.cut.end}); }
-        draggedMarker=candidates.map(item=>({...item,distance:Math.abs((item.value/state.review.audio_duration)*rect.width-x)})).sort((a,b)=>a.distance-b.distance)[0];
+        draggedMarker=candidates.map(item=>({...item,distance:Math.abs(((item.value-viewStart)/viewSpan())*rect.width-x)})).sort((a,b)=>a.distance-b.distance)[0];
         if (!draggedMarker || draggedMarker.distance > 14) { draggedMarker=null; $('sourceAudio').currentTime=waveformTime(event); drawWaveform(); return; }
         event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault();
     });
@@ -668,15 +669,20 @@
     $('previewTeaserBtn').onclick=()=>{ if(state.markers.teaser_start!=null&&state.markers.teaser_end!=null) playSource(state.markers.teaser_start,state.markers.teaser_end); };
     $('previewIntroBtn').onclick=async()=>{ const button=$('previewIntroBtn'); button.disabled=true; button.textContent='Building preview…'; try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preview-teaser`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(!response.ok) throw new Error(data.error); const audio=$('previewAudio'); audio.src=`${data.url}?v=${Date.now()}`; audio.classList.remove('hidden'); await audio.play(); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent='Preview teaser in intro'; } };
 
-    function schedulePreflight(){ clearTimeout(state.preflightTimer); state.preflightTimer=setTimeout(runPreflight,250); }
-    function syncRenderAvailability(){ $('renderBtn').disabled = !(state.preflightReady && $('reviewConfirmed').checked); }
+    function schedulePreflight(){ ++preflightSequence; state.preflightReady=false; syncRenderAvailability(); clearTimeout(state.preflightTimer); state.preflightTimer=setTimeout(runPreflight,250); }
+    function syncRenderAvailability(){ $('renderBtn').disabled = !(!state.editBusy && state.preflightReady && $('reviewConfirmed').checked); }
     $('reviewConfirmed').addEventListener('change', syncRenderAvailability);
+    let preflightSequence=0;
     async function runPreflight(){
+        const sequence=++preflightSequence;
         if(!state.jobId||!state.review) return;
-        try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preflight`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(!response.ok) throw new Error(data.error);
+        try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/preflight`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(sequence!==preflightSequence)return; if(!response.ok) throw new Error(data.error);
             $('selectedDuration').textContent=fmt(data.selected_duration); $('targetSermonDuration').textContent=fmt(data.sermon_target_seconds); const diff=data.difference_seconds; $('differenceDuration').textContent=`${diff>=0?'+':'−'}${fmt(Math.abs(diff))}`; $('teaserDuration').textContent=data.teaser_duration==null?(state.review.include_dynamic?'AI after edit':'Not needed'):`${data.teaser_duration.toFixed(1)}s / ${state.review.teaser_window_seconds.toFixed(0)}s`; $('editCount').textContent=String(state.review.edit_count||0);
+            $('fitExplanation').textContent = Math.abs(diff)<0.5 ? 'Your selection matches the available time.' : `Your selection is ${fmt(Math.abs(diff))} too ${diff>0?'long':'short'}.`;
+            const bumpers = state.review.bumper_durations || {};
+            $('broadcastBreakdown').textContent = `${bumpers.intro ? 'Intro '+fmt(bumpers.intro)+' → ' : ''}Sermon ${fmt(data.sermon_target_seconds)}${bumpers.outro ? ' → Outro '+fmt(bumpers.outro) : ''} · Total ${state.review.target_duration || '—'}`;
             $('preflightNotices').innerHTML=[...data.blockers.map(x=>`<div class="notice error">${esc(x)}</div>`),...data.warnings.map(x=>`<div class="notice warning">${esc(x)}</div>`),...(data.ready&&!data.warnings.length?[`<div class="notice">Ready. Long pauses will be adjusted first, followed by a safe tempo correction if needed.</div>`]:[])].join(''); state.preflightReady=data.ready; syncRenderAvailability();
-        } catch(error){ $('preflightNotices').innerHTML=`<div class="notice error">${esc(error.message)}</div>`; state.preflightReady=false; syncRenderAvailability(); }
+        } catch(error){ if(sequence!==preflightSequence)return; $('preflightNotices').innerHTML=`<div class="notice error">${esc(error.message)}</div>`; state.preflightReady=false; syncRenderAvailability(); }
     }
 
     $('renderBtn').onclick=async()=>{ $('renderBtn').disabled=true; try { const response=await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/render`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectionPayload())}); const data=await response.json(); if(!response.ok) throw new Error(data.error); $('editorPanel').classList.add('hidden'); setStatus('Creating the finished broadcast','Rendering'); pollJob(); } catch(error){ alert(error.message); runPreflight(); } };
@@ -684,6 +690,7 @@
     function showFinished(job){
         clearTimeout(state.poll); $('sourcePanel').classList.add('hidden'); $('statusPanel').classList.add('hidden'); $('editorPanel').classList.add('hidden'); $('finishPanel').classList.remove('hidden'); setStep('Finish');
         const result=job.result||{}; const processing=result.processing||{}; $('finishMetrics').innerHTML=`<div class="metric"><div class="metric-label">Final broadcast</div><div class="metric-value">${fmt(result.broadcast_duration)}</div></div><div class="metric"><div class="metric-label">Selected sermon</div><div class="metric-value">${fmt(processing.original_duration)}</div></div><div class="metric"><div class="metric-label">Pause adjustment</div><div class="metric-value">${Number(processing.silence_adjustment||0).toFixed(1)}s</div></div><div class="metric"><div class="metric-label">Tempo</div><div class="metric-value">${Number(processing.tempo_factor||1).toFixed(3)}×</div></div>`;
+        $('finishedPlayers').innerHTML = (result.outputs||[]).map(output => `<div class="output-preview"><h3>${esc(output.variant === 'stock' ? 'Stock-teaser broadcast' : output.variant === 'dynamic' ? 'Selected-teaser broadcast' : 'Sermon audio')}</h3><audio controls preload="metadata" aria-label="Listen to ${esc(output.variant)}" src="/api/download/${encodeURIComponent(output.filename)}?preview=1"></audio></div>`).join('');
         const labels={dynamic:'Download broadcast with selected teaser',stock:'Download stock-teaser broadcast','sermon-only':'Download sermon'}; $('downloadButtons').innerHTML=(result.outputs||[]).map(output=>`<a class="download" href="/api/download/${encodeURIComponent(output.filename)}">${esc(labels[output.variant]||'Download MP3')}</a>`).join('')+`<a class="secondary" style="text-align:center;text-decoration:none" href="/feedback/${encodeURIComponent(state.jobId)}">Submit feedback</a>`;
     }
 

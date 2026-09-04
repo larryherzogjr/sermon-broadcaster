@@ -7,6 +7,7 @@ import math
 import logging
 import shutil
 import threading
+from functools import wraps
 from urllib.parse import urlparse
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
@@ -20,6 +21,7 @@ from pipeline.time_utils import local_now
 from pipeline.review_workflow import (
     analyze_job,
     apply_working_cut,
+    undo_working_cut,
     build_preflight,
     create_teaser_preview,
     load_transcript,
@@ -46,6 +48,18 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 _cancelled_job_ids = set()
 _cancelled_jobs_lock = threading.Lock()
+
+
+_review_edit_lock = threading.RLock()
+
+
+def serialized_review_edit(function):
+    """Serialize edits and render claims in this single-worker application."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _review_edit_lock:
+            return function(*args, **kwargs)
+    return wrapped
 
 
 class JobCancelled(RuntimeError):
@@ -465,6 +479,7 @@ def review_preflight(job_id):
 
 
 @app.route("/api/jobs/<job_id>/cut", methods=["POST"])
+@serialized_review_edit
 def review_cut(job_id):
     job = db.get_job(job_id)
     metadata = db.get_metadata(job_id)
@@ -497,6 +512,26 @@ def review_cut(job_id):
         return jsonify({"error": str(exc)}), 400
 
 
+@app.route("/api/jobs/<job_id>/undo-cut", methods=["POST"])
+@serialized_review_edit
+def review_undo_cut(job_id):
+    job = db.get_job(job_id)
+    metadata = db.get_metadata(job_id)
+    if not job or not metadata or not job.get("review"):
+        return jsonify({"error": "Review job not found"}), 404
+    if job["status"] != "awaiting_review":
+        return jsonify({"error": f"Job is currently {job['status']}"}), 409
+    try:
+        result = undo_working_cut(job_id, metadata)
+        db.update_metadata(job_id, {
+            "review": result["review"],
+            "transcript_summary": result["metadata"]["transcript_summary"],
+        })
+        return jsonify({"review": result["review"], "waveform": result["waveform"]})
+    except (ValueError, RuntimeError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.route("/api/jobs/<job_id>/preview-teaser", methods=["POST"])
 def review_teaser_preview(job_id):
     job = db.get_job(job_id)
@@ -521,6 +556,7 @@ def review_teaser_preview_audio(job_id):
 
 
 @app.route("/api/jobs/<job_id>/render", methods=["POST"])
+@serialized_review_edit
 def review_render(job_id):
     job = db.get_job(job_id)
     metadata = db.get_metadata(job_id)
@@ -557,7 +593,7 @@ def download_file(filename):
     return send_from_directory(
         config.OUTPUT_DIR,
         filename,
-        as_attachment=True,
+        as_attachment=request.args.get("preview") != "1",
         mimetype="audio/mpeg",
     )
 
@@ -569,6 +605,7 @@ def job_history():
 
 
 @app.route("/api/jobs/<job_id>", methods=["DELETE"])
+@serialized_review_edit
 def delete_job(job_id):
     """Abandon a job and remove its database records and generated files."""
     job = db.get_job(job_id)

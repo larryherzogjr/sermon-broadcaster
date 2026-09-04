@@ -87,6 +87,7 @@ def test_apply_working_cut_splices_audio_and_remaps_editor_state(tmp_path, monke
     assert [segment["text"] for segment in result["transcript"]["segments"]] == ["before", "after"]
     assert sf.info(audio_path).duration == pytest.approx(3.45, abs=0.002)
 
+    before_second_cut = audio_path.read_bytes()
     second = review_workflow.apply_working_cut(
         job_id,
         result["metadata"],
@@ -102,6 +103,19 @@ def test_apply_working_cut_splices_audio_and_remaps_editor_state(tmp_path, monke
     )
     assert second["review"]["audio_duration"] == pytest.approx(3.2, abs=0.002)
     assert second["review"]["edit_count"] == 2
+
+    restored = review_workflow.undo_working_cut(job_id, second["metadata"])
+    assert audio_path.read_bytes() == before_second_cut
+    assert restored["review"]["audio_duration"] == pytest.approx(3.45, abs=0.002)
+    assert sf.info(audio_path).duration == pytest.approx(3.45, abs=0.002)
+    assert restored["review"]["sermon_end"] == pytest.approx(3.25, abs=0.002)
+    assert restored["review"]["teaser_start"] == pytest.approx(1.45, abs=0.002)
+    assert restored["review"]["edit_count"] == 1
+    assert restored["review"]["undo_available"] is False
+    assert restored["review"]["markers_confirmed"] is False
+    assert review_workflow.load_transcript(job_id) == result["transcript"]
+    with pytest.raises(ValueError, match="no cut to undo"):
+        review_workflow.undo_working_cut(job_id, restored["metadata"])
 
 
 def test_preflight_accepts_exact_target():

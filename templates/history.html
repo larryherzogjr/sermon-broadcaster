@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>History — Sermon Broadcaster</title>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg: #1a1a1e;
@@ -177,6 +176,7 @@
             color: var(--text-muted);
         }
     </style>
+    <link rel="stylesheet" href="/static/ui.css">
 </head>
 <body>
     <div class="container">
@@ -241,13 +241,13 @@
 
             let jobAction = '';
             if (job.status === 'awaiting_review') {
-                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">Continue Review</a>`;
+                jobAction = `<a class="btn btn-feedback next-action" href="/?job=${encodeURIComponent(job.job_id)}">Continue Review</a>`;
             } else if (['queued', 'running', 'analyzing', 'rendering'].includes(job.status)) {
-                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">View Progress</a>`;
+                jobAction = `<a class="btn btn-feedback next-action" href="/?job=${encodeURIComponent(job.job_id)}">View Progress</a>`;
             } else if (job.status === 'failed') {
-                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">View Details</a>`;
+                jobAction = `<a class="btn btn-feedback next-action" href="/?job=${encodeURIComponent(job.job_id)}">View Details</a>`;
             } else if (job.status === 'complete') {
-                jobAction = `<a class="btn btn-feedback" href="/?job=${encodeURIComponent(job.job_id)}">View Finished Job</a>`;
+                jobAction = `<a class="btn btn-feedback next-action" href="/?job=${encodeURIComponent(job.job_id)}">View Finished Job</a>`;
                 if (fb.status === 'none') {
                     jobAction += `<a class="btn btn-feedback" href="/feedback/${encodeURIComponent(job.job_id)}">Submit Feedback</a>`;
                 } else if (fb.status === 'in_progress') {
@@ -264,8 +264,8 @@
                             <div class="title">${escHtml(title)}</div>
                             <div class="meta">
                                 job ${escHtml(job.job_id)} &middot; target ${escHtml(job.target_duration)}
-                                <span class="badge ${statusClass}">${escHtml(job.status)}</span>
-                                <span class="badge feedback-${fb.status}">${escHtml(fbLabel)}</span>
+                                <span class="badge ${statusClass}">${escHtml(job.status.replaceAll("_", " "))}</span>
+                                ${fb.status === "none" ? "" : `<span class="badge feedback-${fb.status}">${escHtml(fbLabel)}</span>`}
                             </div>
                         </div>
                         <div class="date">${escHtml(fmtDate(job.created_at))}</div>

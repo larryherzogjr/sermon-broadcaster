@@ -5,6 +5,7 @@ suggestions) is persisted per job. A user can then review exact sermon and
 teaser boundaries before the existing fitting and assembly machinery runs.
 """
 import json
+import copy
 import logging
 import math
 import os
@@ -121,7 +122,7 @@ def _transcript_after_cut(transcript: dict, cut_start: float, cut_end: float,
 
 def apply_working_cut(job_id: str, metadata: dict, selections: dict,
                       cut_start: float, cut_end: float) -> dict:
-    """Permanently splice one range from a review job's editable working audio."""
+    """Splice a range, retaining one complete snapshot for undo."""
     review = dict(metadata.get("review") or {})
     if not review:
         raise ValueError("Review data is no longer available for this job")
@@ -161,6 +162,25 @@ def apply_working_cut(job_id: str, metadata: dict, selections: dict,
         if actual_reduction <= 0:
             raise RuntimeError("The selected cut did not shorten the working audio")
         waveform = _generate_waveform(edited_path, edited_waveform_path)
+        # Save the user's current markers, not just the last persisted suggestion.
+        snapshot = copy.deepcopy(metadata)
+        snapshot["review"].update(normalized)
+        snapshot["review"]["undo_available"] = False
+        undo_dir = os.path.join(artifact_dir, "undo_cut")
+        pending_dir = os.path.join(artifact_dir, "undo_cut.pending")
+        shutil.rmtree(pending_dir, ignore_errors=True)
+        os.makedirs(pending_dir)
+        try:
+            # Working audio is replaced, never modified in place. A hard link
+            # retains its exact bytes without copying a multi-GB recording.
+            os.link(audio_path, os.path.join(pending_dir, "raw_audio.wav"))
+            shutil.copy2(os.path.join(artifact_dir, "transcript.json"), pending_dir)
+            _write_json(os.path.join(pending_dir, "metadata.json"), snapshot)
+        except Exception:
+            shutil.rmtree(pending_dir, ignore_errors=True)
+            raise
+        shutil.rmtree(undo_dir, ignore_errors=True)
+        os.replace(pending_dir, undo_dir)
         os.replace(edited_path, audio_path)
         os.replace(edited_waveform_path, waveform_path)
     finally:
@@ -198,6 +218,7 @@ def apply_working_cut(job_id: str, metadata: dict, selections: dict,
     review["manual_teaser"] = normalized["manual_teaser"]
     review["edit_count"] = int(review.get("edit_count") or 0) + 1
     review["markers_confirmed"] = False
+    review["undo_available"] = True
     if teaser_overlapped or not normalized["manual_teaser"]:
         review["teaser_text"] = ""
     metadata["review"] = review
@@ -214,6 +235,41 @@ def apply_working_cut(job_id: str, metadata: dict, selections: dict,
         "teaser_cleared": teaser_overlapped,
         "metadata": metadata,
     }
+
+
+def undo_working_cut(job_id: str, metadata: dict) -> dict:
+    """Restore audio, transcript, and selections from the most recent cut."""
+    artifact_dir = review_job_dir(job_id)
+    undo_dir = os.path.join(artifact_dir, "undo_cut")
+    if not metadata.get("review", {}).get("undo_available"):
+        raise ValueError("There is no cut to undo")
+    with open(os.path.join(undo_dir, "metadata.json"), encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+    with open(os.path.join(undo_dir, "transcript.json"), encoding="utf-8") as handle:
+        transcript = json.load(handle)
+    waveform = _generate_waveform(
+        os.path.join(undo_dir, "raw_audio.wav"),
+        os.path.join(artifact_dir, "waveform.restoring.json"),
+    )
+    # Keep the snapshot intact until every restore operation succeeds.
+    restore_audio = os.path.join(artifact_dir, "raw_audio.restoring.wav")
+    if os.path.exists(restore_audio):
+        os.remove(restore_audio)
+    os.link(os.path.join(undo_dir, "raw_audio.wav"), restore_audio)
+    _write_json(os.path.join(artifact_dir, "transcript.json"), transcript)
+    os.replace(restore_audio, os.path.join(artifact_dir, "raw_audio.wav"))
+    os.replace(os.path.join(artifact_dir, "waveform.restoring.json"),
+               os.path.join(artifact_dir, "waveform.json"))
+    review = snapshot["review"]
+    review["undo_available"] = False
+    review["markers_confirmed"] = False
+    metadata["review"] = review
+    metadata["transcript_summary"] = {
+        "segment_count": len(transcript.get("segments", [])),
+        "word_count": len(transcript.get("words", [])),
+        "duration": review["audio_duration"],
+    }
+    return {"review": review, "waveform": waveform, "metadata": metadata}
 
 
 def _convert_upload(local_file: str, raw_audio_path: str, status_callback=None) -> None:

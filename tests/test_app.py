@@ -49,8 +49,8 @@ def test_basic_pages_and_health_render(client):
     assert 'id="manualTeaserCheckbox"' not in index_html
     assert 'id="manualTeaserEditorCheckbox"' in index_html
     assert 'id="applyCutBtn"' in index_html
-    assert "I’ll select the sermon manually" in index_html
-    assert 'id="dynamicCheckbox">' in index_html
+    assert "I’ll select it manually" in index_html
+    assert 'id="dynamicCheckbox" checked' in index_html
     assert 'id="analyzeBtn" disabled' in index_html
 
     history = client.get("/history")
@@ -296,3 +296,35 @@ def test_delete_active_job_marks_worker_cancelled(client, app_module):
     assert app_module._job_is_cancelled(job_id) is True
     assert app_module.db.get_job(job_id) is None
     assert client.delete(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_undo_cut_restores_review_metadata(client, app_module, monkeypatch):
+    metadata = {"review": {"undo_available": True}}
+    restored = {"audio_duration": 100, "undo_available": False}
+    monkeypatch.setattr(app_module.db, "get_job", lambda _: {"review": metadata["review"], "status": "awaiting_review"})
+    monkeypatch.setattr(app_module.db, "get_metadata", lambda _: metadata)
+    monkeypatch.setattr(app_module, "undo_working_cut", lambda *_: {
+        "review": restored, "waveform": {"peaks": [0.5]},
+        "metadata": {"transcript_summary": {"duration": 100}},
+    })
+    updates = []
+    monkeypatch.setattr(app_module.db, "update_metadata", lambda *args: updates.append(args))
+    response = client.post("/api/jobs/1/undo-cut")
+    assert response.status_code == 200
+    assert response.get_json()["review"] == restored
+    assert updates[0][1]["review"] == restored
+
+
+def test_undo_cut_rejects_rendering_jobs(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.db, "get_job", lambda _: {"review": {"undo_available": True}, "status": "rendering"})
+    monkeypatch.setattr(app_module.db, "get_metadata", lambda _: {"review": {"undo_available": True}})
+    assert client.post("/api/jobs/1/undo-cut").status_code == 409
+
+
+def test_finished_audio_preview_is_inline(client, app_module, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module.config, "OUTPUT_DIR", str(tmp_path))
+    (tmp_path / "preview.mp3").write_bytes(b"test audio")
+    download = client.get("/api/download/preview.mp3")
+    preview = client.get("/api/download/preview.mp3?preview=1")
+    assert download.headers["Content-Disposition"].startswith("attachment")
+    assert preview.headers["Content-Disposition"].startswith("inline")
