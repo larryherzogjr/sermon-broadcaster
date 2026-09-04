@@ -7,7 +7,7 @@ install-dev:
 	python3 -m pip install -r requirements-dev.txt
 
 check:
-	python3 -m compileall -q app.py config.py pipeline tests
+	python3 -m compileall -q app.py config.py cleanup_jobs.py pipeline tests
 	python3 -m pytest
 
 test:

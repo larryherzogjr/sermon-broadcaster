@@ -139,13 +139,18 @@ the app before exposing it outside a trusted private network.
 
 ### Periodic cleanup (cron)
 
-```cron
-# Weekly cleanup of old files
-0 3 * * 0 find /opt/sermon-broadcaster/pipeline/cache -type f -mtime +30 -delete
-0 3 * * 0 find /opt/sermon-broadcaster/output -type f -mtime +60 -delete
-0 3 * * 0 find /opt/sermon-broadcaster/uploads -type f -mtime +7 -delete
-0 3 * * 0 find /opt/sermon-broadcaster/state/review_jobs -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
+Install the supplied cron definition:
+
+```bash
+sudo cp sermon-broadcaster-cleanup.cron /etc/cron.d/sermon-broadcaster-cleanup
+sudo chmod 644 /etc/cron.d/sermon-broadcaster-cleanup
 ```
+
+It runs daily at 3:00 AM and deletes every Job History entry created more than
+14 days ago, regardless of status. The job's database records, uploaded source,
+review artifacts, render work directory, outputs, and local feedback are removed
+together. Run `venv/bin/python cleanup_jobs.py --days 14 --dry-run` to preview
+the affected jobs manually.
 
 ## Configuration
 

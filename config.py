@@ -108,6 +108,7 @@ MAX_SLOWDOWN = 0.93  # Don't slow down more than 7%
 # Paths
 WORK_DIR = os.path.join(os.path.dirname(__file__), "work")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DB_PATH = os.path.join(STATE_DIR, "jobs.db")
 # Persisted source audio, transcripts, waveform summaries, and previews for the

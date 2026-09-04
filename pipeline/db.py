@@ -337,6 +337,13 @@ def get_job(job_id):
         return _row_to_job_dict(conn, row)
 
 
+def job_exists(job_id):
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM jobs WHERE id=?", (job_id,)
+        ).fetchone() is not None
+
+
 def list_jobs(limit=200):
     with _connect() as conn:
         rows = conn.execute(
@@ -344,6 +351,17 @@ def list_jobs(limit=200):
             (limit,),
         ).fetchall()
         return [_row_to_job_dict(conn, r) for r in rows]
+
+
+def list_job_ids_created_before(cutoff):
+    """Return every job created strictly before an ISO-8601 cutoff."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE julianday(created_at) < julianday(?) "
+            "ORDER BY created_at ASC",
+            (cutoff,),
+        ).fetchall()
+        return [row["id"] for row in rows]
 
 
 def delete_job(job_id):

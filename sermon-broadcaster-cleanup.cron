@@ -1,0 +1,3 @@
+# Install as /etc/cron.d/sermon-broadcaster-cleanup
+# Delete all Job History entries more than 14 days after their creation.
+0 3 * * * lherzog cd /opt/sermon-broadcaster && /opt/sermon-broadcaster/venv/bin/python cleanup_jobs.py --days 14

@@ -15,6 +15,7 @@ from werkzeug.utils import secure_filename
 import config
 from pipeline import db
 from pipeline import feedback
+from pipeline.job_cleanup import cleanup_job_files
 from pipeline.time_utils import local_now
 from pipeline.review_workflow import (
     analyze_job,
@@ -40,7 +41,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_GB * 1024 * 1024 * 1024
 
 # Upload directory
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+UPLOAD_DIR = config.UPLOAD_DIR
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 _cancelled_job_ids = set()
@@ -66,45 +67,13 @@ def _finish_cancelled_job(job_id):
         _cancelled_job_ids.discard(job_id)
 
 
-def _remove_file(path):
-    try:
-        if os.path.isfile(path):
-            os.remove(path)
-    except OSError:
-        logger.warning("Could not remove deleted-job file %s", path, exc_info=True)
-
-
 def _cleanup_job_files(job_id, job=None):
-    """Remove persisted and temporary files belonging to exactly one job id."""
-    try:
-        shutil.rmtree(review_job_dir(job_id), ignore_errors=True)
-    except ValueError:
-        return
+    cleanup_job_files(job_id, job, upload_dir=UPLOAD_DIR)
 
-    if job and job.get("source_type") == "upload":
-        source_name = os.path.basename(str(job.get("source") or ""))
-        if source_name.startswith(f"{job_id}_"):
-            _remove_file(os.path.join(UPLOAD_DIR, source_name))
 
-    output_names = {
-        f"sermon_{job_id}.mp3",
-        f"sermon_{job_id}_dynamic.mp3",
-        f"sermon_{job_id}_stock.mp3",
-    }
-    for output in ((job or {}).get("result") or {}).get("outputs", []):
-        filename = os.path.basename(str(output.get("filename") or ""))
-        if filename.startswith(f"sermon_{job_id}"):
-            output_names.add(filename)
-    for filename in output_names:
-        _remove_file(os.path.join(config.OUTPUT_DIR, filename))
-
-    work_prefix = f"review_{job_id}_"
-    try:
-        for name in os.listdir(config.WORK_DIR):
-            if name.startswith(work_prefix):
-                shutil.rmtree(os.path.join(config.WORK_DIR, name), ignore_errors=True)
-    except OSError:
-        pass
+def _job_was_deleted(job_id):
+    """Detect deletion by this process or by the external cleanup command."""
+    return _job_is_cancelled(job_id) or not db.job_exists(job_id)
 
 # Persistence: schema + reconcile orphaned jobs from a prior crash/restart.
 # Runs at import time so it executes under systemd too.
@@ -203,7 +172,7 @@ class Job:
         )
 
     def update_status(self, message):
-        if _job_is_cancelled(self.job_id):
+        if _job_was_deleted(self.job_id):
             raise JobCancelled(f"Job {self.job_id} was deleted")
         ts = local_now().strftime("%H:%M:%S")
         db.append_message(self.job_id, ts, message)
@@ -232,7 +201,7 @@ def _run_analysis(job: Job):
             manual_teaser=job.manual_teaser,
             status_callback=job.update_status,
         )
-        if _job_is_cancelled(job.job_id):
+        if _job_was_deleted(job.job_id):
             raise JobCancelled(f"Job {job.job_id} was deleted")
         db.set_analysis_ready(job.job_id, metadata)
         if job.manual_selection:
@@ -242,11 +211,11 @@ def _run_analysis(job: Job):
     except JobCancelled:
         logger.info("Analysis for deleted job %s was cancelled", job.job_id)
     except Exception as e:
-        if not _job_is_cancelled(job.job_id):
+        if not _job_was_deleted(job.job_id):
             job.set_error(str(e))
             logger.exception(f"Analysis for job {job.job_id} failed")
     finally:
-        if _job_is_cancelled(job.job_id):
+        if _job_was_deleted(job.job_id):
             _cleanup_job_files(job.job_id, {
                 "source": os.path.basename(job.local_file) if job.local_file else "",
                 "source_type": "upload" if job.local_file else "youtube",
@@ -263,24 +232,24 @@ def _run_render(job_id: str, selections: dict):
         db.set_status(job_id, "rendering")
 
         def update(message):
-            if _job_is_cancelled(job_id):
+            if _job_was_deleted(job_id):
                 raise JobCancelled(f"Job {job_id} was deleted")
             ts = local_now().strftime("%H:%M:%S")
             db.append_message(job_id, ts, message)
             logger.info(f"[Job {job_id}] {message}")
 
         result = render_job(job_id, metadata, selections, status_callback=update)
-        if _job_is_cancelled(job_id):
+        if _job_was_deleted(job_id):
             raise JobCancelled(f"Job {job_id} was deleted")
         db.set_result(job_id, result.pop("outputs", []), result)
     except JobCancelled:
         logger.info("Render for deleted job %s was cancelled", job_id)
     except Exception as e:
-        if not _job_is_cancelled(job_id):
+        if not _job_was_deleted(job_id):
             db.set_review_error(job_id, str(e))
             logger.exception(f"Render for job {job_id} failed")
     finally:
-        if _job_is_cancelled(job_id):
+        if _job_was_deleted(job_id):
             _cleanup_job_files(job_id)
             _finish_cancelled_job(job_id)
 
