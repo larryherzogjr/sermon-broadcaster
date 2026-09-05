@@ -643,19 +643,46 @@
     };
     const waveformTime = event => { const rect=$('waveform').getBoundingClientRect(); return Math.max(0,Math.min(state.review.audio_duration,viewStart+((event.clientX-rect.left)/rect.width)*viewSpan())); };
     $('waveform').addEventListener('pointerdown', event => {
+        if (!state.review || event.button !== 0 || event.isPrimary === false || draggedMarker) return;
+        // A press always seeks, even directly on a boundary. A nearby marker
+        // becomes draggable only after deliberate horizontal movement.
+        state.previewStop = null;
+        $('sourceAudio').currentTime = waveformTime(event);
+        drawWaveform();
         const rect=event.currentTarget.getBoundingClientRect(); const x=event.clientX-rect.left;
         const keys=['sermon_start','sermon_end',...(state.review.include_dynamic&&(!state.review.manual_selection||state.manualTeaser)?['teaser_start','teaser_end']:[])].filter(key=>state.markers[key]!=null);
         const candidates=keys.map(key=>({kind:'marker',key,value:state.markers[key]}));
         if(state.cut.enabled){ candidates.push({kind:'cut',edge:'start',value:state.cut.start},{kind:'cut',edge:'end',value:state.cut.end}); }
-        draggedMarker=candidates.map(item=>({...item,distance:Math.abs(((item.value-viewStart)/viewSpan())*rect.width-x)})).sort((a,b)=>a.distance-b.distance)[0];
-        if (!draggedMarker || draggedMarker.distance > 14) { draggedMarker=null; $('sourceAudio').currentTime=waveformTime(event); drawWaveform(); return; }
+        const nearest=candidates.filter(item=>item.value!=null).map(item=>({...item,distance:Math.abs(((item.value-viewStart)/viewSpan())*rect.width-x)})).sort((a,b)=>a.distance-b.distance)[0];
+        if (!nearest || nearest.distance > 14) return;
+        draggedMarker = {...nearest, pointerId:event.pointerId, startX:event.clientX, secondsPerPixel:viewSpan()/rect.width, dragging:false};
         event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault();
     });
-    const setDraggedMarker = value => { if(draggedMarker.kind==='cut')state.cut[draggedMarker.edge]=value;else state.markers[draggedMarker.key]=value; };
-    $('waveform').addEventListener('pointermove', event => { if(!draggedMarker)return; setDraggedMarker(waveformTime(event)); updateMarkers(); });
-    const finishMarkerDrag = event => { if(!draggedMarker)return; setDraggedMarker(waveformTime(event)); draggedMarker=null; updateMarkers(); };
-    $('waveform').addEventListener('pointerup', finishMarkerDrag);
-    $('waveform').addEventListener('pointercancel', () => { draggedMarker=null; });
+    const setDraggedMarker = event => {
+        // Retain the grab offset instead of snapping the boundary to the cursor.
+        const value = Math.max(0, Math.min(state.review.audio_duration,
+            draggedMarker.value + (event.clientX-draggedMarker.startX)*draggedMarker.secondsPerPixel));
+        if(draggedMarker.kind==='cut') state.cut[draggedMarker.edge]=value;
+        else state.markers[draggedMarker.key]=value;
+        updateMarkers();
+    };
+    $('waveform').addEventListener('pointermove', event => {
+        if(!draggedMarker || event.pointerId!==draggedMarker.pointerId) return;
+        if(!draggedMarker.dragging && Math.abs(event.clientX-draggedMarker.startX)<5) return;
+        draggedMarker.dragging=true;
+        setDraggedMarker(event);
+    });
+    $('waveform').addEventListener('pointerup', event => {
+        if(!draggedMarker || event.pointerId!==draggedMarker.pointerId) return;
+        if(draggedMarker.dragging) setDraggedMarker(event);
+        else { $('sourceAudio').currentTime=waveformTime(event); drawWaveform(); }
+        draggedMarker=null;
+    });
+    const cancelMarkerDrag = event => {
+        if(draggedMarker && event.pointerId===draggedMarker.pointerId) draggedMarker=null;
+    };
+    $('waveform').addEventListener('pointercancel', cancelMarkerDrag);
+    $('waveform').addEventListener('lostpointercapture', cancelMarkerDrag);
     window.addEventListener('resize', drawWaveform); $('sourceAudio').addEventListener('timeupdate', () => { $('currentTime').textContent=fmt($('sourceAudio').currentTime,true); drawWaveform(); if (state.previewStop != null && $('sourceAudio').currentTime >= state.previewStop) { $('sourceAudio').pause(); state.previewStop=null; } });
 
     function playSource(start, end) { const audio=$('sourceAudio'); state.previewStop=Math.min(end,state.review.audio_duration); audio.currentTime=Math.max(0,start); safePlay(audio); }
