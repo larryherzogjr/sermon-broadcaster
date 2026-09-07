@@ -6,22 +6,8 @@ load_dotenv()
 # Claude API
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-# Per-task model selection — different tasks have different needs.
-# Boundary detection is mechanical (find start/end), Sonnet handles fine.
-# Teaser selection requires more "taste" — Opus can pick more compelling clips
-# and copy text more reliably verbatim, reducing retries.
-# NOTE: claude-sonnet-4-20250514 was retired 2026-06-15 (API returns 404).
-# claude-sonnet-5 is the replacement. The boundary call disables thinking
-# (see boundary_detector.py) because Sonnet 5 enables adaptive thinking by
-# default, which would put a thinking block first in response.content.
-_legacy_claude_model = os.getenv("CLAUDE_MODEL", "").strip()
-CLAUDE_MODEL_BOUNDARY = os.getenv(
-    "CLAUDE_MODEL_BOUNDARY", _legacy_claude_model or "claude-sonnet-5"
-)
+# Claude is used for teaser selection and feedback, not sermon boundaries.
 CLAUDE_MODEL_TEASER = os.getenv("CLAUDE_MODEL_TEASER", "claude-opus-4-8")
-
-# Legacy fallback — if old code references CLAUDE_MODEL, use boundary model
-CLAUDE_MODEL = CLAUDE_MODEL_BOUNDARY
 
 # Legacy transcription toggle (superseded by TRANSCRIBE_BACKEND below).
 # "local" = faster-whisper on CPU, "cloud" = OpenAI Whisper API.
@@ -115,6 +101,14 @@ DB_PATH = os.path.join(STATE_DIR, "jobs.db")
 # human review step. These are intentionally separate from WORK_DIR, whose
 # contents are disposable render intermediates.
 REVIEW_DIR = os.path.join(STATE_DIR, "review_jobs")
+
+# Hymn-based sermon detection. Short sung responses never count as hymns.
+HYMN_MIN_DURATION_SECONDS = 90.0
+HYMN_MAX_GAP_SECONDS = 5.0  # Bridge short breaks between verses.
+HYMN_END_SEARCH_SECONDS = 120.0  # Look for the closing Amen near the final hymn.
+HYMN_MODEL_PATH = os.getenv(
+    "HYMN_MODEL_PATH", os.path.join(STATE_DIR, "models", "yamnet.onnx")
+)
 
 # Human-review guardrails. Small timing corrections are safe to automate; a
 # large shortfall usually means the selected sermon boundaries are wrong.

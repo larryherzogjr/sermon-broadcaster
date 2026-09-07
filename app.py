@@ -146,10 +146,9 @@ def _validate_processing_requirements(target_duration, include_dynamic,
             raise RuntimeError("OPENAI_API_KEY is required for the OpenAI transcription backend")
         if backend == "local" and not config.WHISPER_LOCAL_URL:
             raise RuntimeError("WHISPER_LOCAL_URL is required for the local transcription backend")
-    needs_automatic_analysis = not sermon_only and not manual_selection
     needs_automatic_teaser = include_dynamic and not manual_selection
-    if (needs_automatic_analysis or needs_automatic_teaser) and not config.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is required for sermon or teaser analysis")
+    if needs_automatic_teaser and not config.ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY is required for automatic teaser selection")
 
     # This also validates ffprobe, required bumper files, their durations, and
     # the relationship between the requested target and the installed bumpers.

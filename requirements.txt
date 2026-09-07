@@ -7,3 +7,4 @@ python-dotenv==1.2.2
 soundfile==0.14.0
 numpy==2.4.6
 requests==2.34.2
+onnxruntime==1.29.0

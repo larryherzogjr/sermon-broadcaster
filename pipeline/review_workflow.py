@@ -29,9 +29,8 @@ from pipeline.audio_processor import (
     get_audio_duration,
     remove_segment,
 )
-from pipeline.boundary_detector import detect_boundaries
+from pipeline.boundary_detector import BoundaryDetectionError, detect_boundaries
 from pipeline.downloader import download_audio
-from pipeline.orchestrator import select_content_combination
 from pipeline.teaser_selector import select_teaser
 from pipeline.transcription import transcribe
 
@@ -344,8 +343,8 @@ def sermon_target_seconds(target_duration: str, include_dynamic: bool,
 
 
 def _initial_boundaries(transcript_data: dict, use_full_source: bool,
-                        sermon_target: float, audio_duration: float,
-                        status_callback=None) -> dict:
+                        audio_duration: float,
+                        status_callback=None, audio_path: str = None) -> dict:
     if use_full_source:
         return {
             "sermon_start": 0.0,
@@ -356,12 +355,21 @@ def _initial_boundaries(transcript_data: dict, use_full_source: bool,
             "sermon_title_guess": "Manual sermon selection",
         }
 
-    boundaries = detect_boundaries(transcript_data, status_callback)
-    if "sermon_end_with_prayer" in boundaries:
-        selection = select_content_combination(boundaries, sermon_target, status_callback)
-        boundaries["sermon_start"] = selection["start"]
-        boundaries["sermon_end"] = selection["end"]
-        boundaries["selection_label"] = selection["label"]
+    try:
+        boundaries = detect_boundaries(audio_path, transcript_data, status_callback)
+    except BoundaryDetectionError as exc:
+        # The review editor remains usable when music cannot be identified.
+        # Do not substitute a transcript guess or an older detection strategy.
+        logger.warning("Automatic hymn selection unavailable: %s", exc)
+        if status_callback:
+            status_callback(str(exc))
+        return {
+            "sermon_start": 0.0,
+            "sermon_end": float(audio_duration),
+            "confidence": "review needed",
+            "sermon_title_guess": "Select the sermon",
+            "selection_warning": str(exc),
+        }
     if "sermon_start" not in boundaries or "sermon_end" not in boundaries:
         raise RuntimeError("Boundary analysis did not return a usable sermon range")
     return boundaries
@@ -423,12 +431,12 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
         target_duration, include_dynamic, include_stock
     )
     boundaries = _initial_boundaries(
-        transcript_data, sermon_only or manual_selection, target_seconds,
-        float(waveform["duration"]), status_callback
+        transcript_data, sermon_only or manual_selection,
+        float(waveform["duration"]), status_callback, audio_path=raw_audio_path
     )
 
     teaser = None
-    if include_dynamic and not manual_selection:
+    if include_dynamic and not manual_selection and not boundaries.get("selection_warning"):
         try:
             teaser = select_teaser(
                 transcript_data,
@@ -461,6 +469,8 @@ def analyze_job(job_id: str, *, youtube_url: str = None, local_file: str = None,
         "teaser_text": teaser.get("teaser_text", "") if teaser else "",
         "title": boundaries.get("sermon_title_guess") or "Sermon",
         "confidence": boundaries.get("confidence") or "—",
+        "selection_reason": boundaries.get("selection_reason", ""),
+        "selection_warning": boundaries.get("selection_warning", ""),
         "analysis_seconds": round(time.time() - started, 1),
     }
     return {

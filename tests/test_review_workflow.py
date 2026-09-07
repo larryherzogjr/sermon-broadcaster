@@ -135,11 +135,70 @@ def test_preflight_accepts_exact_target():
 
 def test_manual_full_source_uses_decoded_audio_duration():
     boundaries = review_workflow._initial_boundaries(
-        {"duration": 1800.8}, True, 1800.0, 1800.0
+        {"duration": 1800.8}, True, 1800.0
     )
 
     assert boundaries["sermon_start"] == 0.0
     assert boundaries["sermon_end"] == 1800.0
+
+
+def test_hymn_failure_opens_full_recording_for_review(monkeypatch):
+    def fail(*_args):
+        raise review_workflow.BoundaryDetectionError("Select the sermon manually.")
+
+    monkeypatch.setattr(review_workflow, "detect_boundaries", fail)
+    boundaries = review_workflow._initial_boundaries({}, False, 4800, audio_path="recording.wav")
+    assert boundaries["sermon_start"] == 0
+    assert boundaries["sermon_end"] == 4800
+    assert boundaries["confidence"] == "review needed"
+    assert boundaries["selection_warning"] == "Select the sermon manually."
+
+
+def test_automatic_analysis_passes_original_audio_and_does_not_select_by_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_workflow.config, "REVIEW_DIR", str(tmp_path))
+    monkeypatch.setattr(review_workflow, "download_audio", lambda _url, directory, _status: f"{directory}/raw_audio.wav")
+    monkeypatch.setattr(review_workflow, "transcribe", lambda *_args: {"duration": 4800, "words": [], "segments": []})
+    monkeypatch.setattr(review_workflow, "_generate_waveform", lambda *_args: {"duration": 4800})
+    monkeypatch.setattr(review_workflow, "sermon_target_seconds", lambda target, *_args: (float(target), {}))
+    received_paths = []
+
+    def detect(audio_path, transcript, _status):
+        received_paths.append(audio_path)
+        assert transcript["duration"] == 4800
+        return {"sermon_start": 1900, "sermon_end": 3600,
+                "selection_reason": "Between hymns, through the closing Amen."}
+
+    monkeypatch.setattr(review_workflow, "detect_boundaries", detect)
+    for job_id, target in [("100001", "1500"), ("100002", "1800")]:
+        result = review_workflow.analyze_job(
+            job_id, youtube_url="https://www.youtube.com/watch?v=kbz86frmaYc",
+            target_duration=target, include_dynamic=False, include_stock=True, sermon_only=False,
+        )
+        assert result["review"]["sermon_start"] == 1900
+        assert result["review"]["sermon_end"] == 3600
+        assert result["review"]["selection_reason"] == "Between hymns, through the closing Amen."
+        assert result["review"]["sermon_target_seconds"] == float(target)
+    assert received_paths == [str(tmp_path / job / "raw_audio.wav") for job in ("100001", "100002")]
+
+
+def test_hymn_failure_does_not_request_a_teaser_from_entire_service(tmp_path, monkeypatch):
+    monkeypatch.setattr(review_workflow.config, "REVIEW_DIR", str(tmp_path))
+    monkeypatch.setattr(review_workflow, "download_audio", lambda _url, directory, _status: f"{directory}/raw_audio.wav")
+    monkeypatch.setattr(review_workflow, "transcribe", lambda *_args: {"duration": 4800})
+    monkeypatch.setattr(review_workflow, "_generate_waveform", lambda *_args: {"duration": 4800})
+    monkeypatch.setattr(review_workflow, "sermon_target_seconds", lambda *_args: (1638, {}))
+    monkeypatch.setattr(review_workflow, "select_teaser", lambda *_args: pytest.fail("No whole-service teaser"))
+
+    def fail(*_args):
+        raise review_workflow.BoundaryDetectionError("No hymns found; select manually.")
+
+    monkeypatch.setattr(review_workflow, "detect_boundaries", fail)
+    result = review_workflow.analyze_job(
+        "100003", youtube_url="https://www.youtube.com/watch?v=kbz86frmaYc",
+        target_duration="29:30", include_dynamic=True, include_stock=False, sermon_only=False,
+    )
+    assert result["review"]["selection_warning"]
+    assert result["review"]["teaser_start"] is None
 
 
 def test_manual_analysis_skips_transcription(tmp_path, monkeypatch):

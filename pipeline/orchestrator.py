@@ -59,139 +59,6 @@ def _parse_target(duration_str: str) -> float:
     return 0
 
 
-def select_content_combination(boundaries: dict, sermon_target: float,
-                               status_callback=None) -> dict:
-    """
-    Select start/end boundaries based on Larry's content priority hierarchy:
-
-      Always include: scripture + sermon body (if scripture exists; else just body)
-      Add opening prayer if it fits within tempo limits (cut FIRST if trimming needed)
-      Add closing prayer if it fits within tempo limits (cut SECOND if more trimming needed)
-
-    Service order (when all components present):
-      scripture reading → ["please stand" cue + opening prayer + "be seated" cue] →
-      sermon body → ... → closing prayer
-
-    No internal splicing — the broadcast is a single continuous extract from the
-    chosen start to the chosen end. Transition cues ("please stand", "you may be
-    seated") stay in the audio as natural service transitions.
-
-    Returns a dict with:
-      - start: selected start timestamp (seconds)
-      - end: selected end timestamp (seconds)
-      - label: human-readable description of the selection
-      - duration: end - start
-    """
-    sermon_body_start = boundaries.get("sermon_body_start") or boundaries["sermon_start"]
-    scripture_start = boundaries.get("scripture_start")
-    scripture_end = boundaries.get("scripture_end")
-    opening_prayer_start = boundaries.get("opening_prayer_start")
-    opening_prayer_end = boundaries.get("opening_prayer_end")
-    end_with = boundaries["sermon_end_with_prayer"]
-    end_without = boundaries["sermon_end_without_prayer"]
-
-    has_scripture = scripture_start is not None and scripture_end is not None
-    has_opening_prayer = (opening_prayer_start is not None
-                         and opening_prayer_end is not None)
-
-    # Build candidate options, most → least inclusive
-    options = []
-
-    # ─ Option A: scripture (if any) + opening prayer + body + closing prayer ─
-    if has_opening_prayer:
-        start = scripture_start if has_scripture else opening_prayer_start
-        options.append({
-            "start": start,
-            "end": end_with,
-            "label": ("scripture + opening prayer + sermon + closing prayer"
-                      if has_scripture
-                      else "opening prayer + sermon + closing prayer"),
-            "rank": 4 if has_scripture else 2,
-            "duration": end_with - start,
-        })
-
-    # ─ Option B: scripture (or body) + body + closing prayer ─
-    # If scripture exists, the start is at scripture_start; the broadcast then
-    # plays continuously through scripture → (stand cue) → opening prayer →
-    # (sit cue) → body. To "exclude" the opening prayer, start at body instead.
-    #
-    # Starting at sermon_body_start only makes sense when there's an opening
-    # prayer to skip. With NO scripture and NO opening prayer, sermon_body_start
-    # just drops the sermon's opening (e.g. an inline scripture reading) — and
-    # it's a raw Claude field that swings run-to-run (e.g. 1962s vs 2006s on the
-    # same sermon). In that case, open at the refined, word-snapped sermon_start
-    # for a consistent, complete start.
-    if has_scripture:
-        base_start = scripture_start
-    elif has_opening_prayer:
-        base_start = sermon_body_start
-    else:
-        base_start = boundaries["sermon_start"]
-    options.append({
-        "start": base_start,
-        "end": end_with,
-        "label": ("scripture + sermon + closing prayer" if has_scripture
-                  else "sermon + closing prayer"),
-        "rank": 3 if has_scripture else 1,
-        "duration": end_with - base_start,
-    })
-
-    # ─ Option C: scripture (or body) + body only (no closing prayer) ─
-    options.append({
-        "start": base_start,
-        "end": end_without,
-        "label": ("scripture + sermon" if has_scripture else "sermon only"),
-        "rank": 2 if has_scripture else 0,
-        "duration": end_without - base_start,
-    })
-
-    # Fit threshold: we can speed up by MAX_SPEEDUP and trim ~60s of natural silence
-    max_fittable = sermon_target * config.MAX_SPEEDUP + 60
-
-    logger.info(
-        f"[SELECT] Target: {sermon_target:.0f}s. "
-        f"Max fittable (after trim+speedup): {max_fittable:.0f}s"
-    )
-    for opt in options:
-        delta = opt["duration"] - sermon_target
-        fits = opt["duration"] <= max_fittable
-        logger.info(
-            f"[SELECT] Option {opt['label']}: dur={opt['duration']:.0f}s, "
-            f"delta={delta:+.0f}s, fits={fits}"
-        )
-
-    # Pick the most inclusive option that fits (duration ≤ max_fittable).
-    # Options are already in most→least inclusive order.
-    for opt in options:
-        if opt["duration"] <= max_fittable:
-            logger.info(f"[SELECT] CHOSEN: {opt['label']} ({opt['duration']:.0f}s)")
-            if status_callback:
-                delta = opt["duration"] - sermon_target
-                direction = "trim" if delta > 0 else "expand"
-                status_callback(
-                    f"Selected content: {opt['label']} "
-                    f"({opt['duration']/60:.1f} min, need to {direction} "
-                    f"{abs(delta):.0f}s)"
-                )
-            return opt
-
-    # All options are too long. Use the least inclusive (Option C) and accept overshoot.
-    chosen = options[-1]
-    logger.warning(
-        f"[SELECT] All options exceed max_fittable. Using {chosen['label']} "
-        f"({chosen['duration']:.0f}s, target {sermon_target:.0f}s) — overshoot expected"
-    )
-    if status_callback:
-        status_callback(
-            f"All combinations too long; using minimal selection "
-            f"({chosen['label']}, may overshoot target)"
-        )
-    return chosen
-
-
-# Backward-compatible name for older callers.
-_select_content_combination = select_content_combination
-
 # Transcription goes through the normalizing dispatcher, which selects the
 # backend via config.TRANSCRIBE_BACKEND (openai | local | faster-whisper) and
 # returns one identical dict shape so downstream stays backend-agnostic.
@@ -371,8 +238,6 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
             boundaries = {
                 "sermon_start": 0.0,
                 "sermon_end": full_duration,
-                "sermon_end_with_prayer": full_duration,
-                "sermon_end_without_prayer": full_duration,
                 "confidence": "manual",
                 "sermon_title_guess": "Uploaded sermon (pre-trimmed)",
             }
@@ -390,17 +255,9 @@ def run_pipeline(youtube_url: str = None, local_file: str = None,
             if status_callback:
                 status_callback("Using manually specified sermon boundaries...")
         else:
-            boundaries = detect_boundaries(transcript_data, status_callback)
+            boundaries = detect_boundaries(raw_audio_path, transcript_data, status_callback)
 
-        # Choose which content combination to use (skip if sermon_only — already set)
-        if not sermon_only and "sermon_end_with_prayer" in boundaries:
-            selection = select_content_combination(
-                boundaries, sermon_target_seconds, status_callback,
-            )
-            boundaries["sermon_start"] = selection["start"]
-            boundaries["sermon_end"] = selection["end"]
-            boundaries["selection_label"] = selection["label"]
-        elif "sermon_end" not in boundaries:
+        if "sermon_end" not in boundaries:
             raise RuntimeError("Boundary detection returned no end point")
 
         result["boundaries"] = boundaries

@@ -169,7 +169,7 @@
         <div class="source-grid">
             <fieldset class="setup-section">
                 <legend>2. Sermon selection</legend>
-                <label class="choice"><input type="radio" name="selectionMode" id="automaticSelection" checked><span><strong>Find the sermon for me</strong><small>Review suggested boundaries and a transcript.</small></span></label>
+                <label class="choice"><input type="radio" name="selectionMode" id="automaticSelection" checked><span><strong>Find the sermon for me</strong><small>Select between the final two hymns, then review the markers.</small></span></label>
                 <label class="choice"><input type="radio" name="selectionMode" id="manualSelectionCheckbox"><span><strong>I’ll select it manually</strong><small>Open the waveform and choose the sermon yourself.</small></span></label>
                 <label class="choice"><input type="radio" name="selectionMode" id="sermonOnlyCheckbox"><span><strong>The recording is already sermon-only</strong><small>Start with the entire recording selected.</small></span></label>
             </fieldset>
@@ -458,7 +458,7 @@
         $('sermonTitle').textContent = job.review.title || 'Review the sermon';
         $('confidenceText').textContent = job.review.manual_selection
             ? 'Manual mode: crop the sermon with the green start and end markers.'
-            : `Automated confidence: ${job.review.confidence || '—'}.`;
+            : job.review.selection_warning || job.review.selection_reason || `Automated confidence: ${job.review.confidence || '—'}.`;
         const manualTeaser = job.review.manual_selection && state.manualTeaser;
         const showTeaserMarkers = job.review.include_dynamic && (!job.review.manual_selection || manualTeaser);
         $('manualTeaserEditorChoice').classList.toggle('hidden', !job.review.manual_selection || !job.review.include_dynamic);

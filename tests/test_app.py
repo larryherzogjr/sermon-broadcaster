@@ -38,6 +38,16 @@ def client(app_module):
     return app_module.app.test_client()
 
 
+def test_hymn_detection_does_not_require_an_anthropic_key(app_module, monkeypatch):
+    monkeypatch.setattr(app_module.config, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(app_module.config, "TRANSCRIBE_BACKEND", "faster-whisper")
+    monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(app_module, "sermon_target_seconds", lambda *_args: (1638, {}))
+    app_module._validate_processing_requirements("29:30", False, True, False)
+    with pytest.raises(RuntimeError, match="automatic teaser"):
+        app_module._validate_processing_requirements("29:30", True, False, False)
+
+
 def test_basic_pages_and_health_render(client):
     index = client.get("/")
     assert index.status_code == 200

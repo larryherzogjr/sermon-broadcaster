@@ -48,8 +48,8 @@ def _job_context_lines(job):
     s_end_with = boundaries.get("sermon_end_with_prayer")
     s_end_without = boundaries.get("sermon_end_without_prayer")
 
-    endpoint_used = "—"
-    if s_end is not None:
+    endpoint_used = boundaries.get("end_method") or "—"
+    if s_end is not None and not boundaries.get("end_method"):
         if s_end_with is not None and abs(s_end - s_end_with) < 0.5:
             endpoint_used = "with-prayer"
         elif s_end_without is not None and abs(s_end - s_end_without) < 0.5:
@@ -304,8 +304,11 @@ def _build_issue_body(job, messages, summary, severity):
     out.append("### Boundaries\n")
     out.append(f"- sermon_start: {boundaries.get('sermon_start')}\n")
     out.append(f"- sermon_end (selected): {boundaries.get('sermon_end')}\n")
-    out.append(f"- sermon_end_with_prayer: {boundaries.get('sermon_end_with_prayer')}\n")
-    out.append(f"- sermon_end_without_prayer: {boundaries.get('sermon_end_without_prayer')}\n")
+    for key in ("end_method", "selection_reason", "selection_warning",
+                "preceding_hymn", "following_hymn",
+                "sermon_end_with_prayer", "sermon_end_without_prayer"):
+        if key in boundaries:  # Retain diagnostics for older saved jobs, too.
+            out.append(f"- {key}: {boundaries[key]}\n")
     out.append(f"- sermon_title_guess: {boundaries.get('sermon_title_guess')}\n")
     out.append(f"- confidence: {boundaries.get('confidence')}\n\n")
 

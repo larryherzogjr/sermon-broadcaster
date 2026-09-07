@@ -14,10 +14,13 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 - **Two-stage workflow:** analyze once, review selections, then render without downloading or transcribing again
 - **Job cleanup:** abandon active work or delete completed/failed jobs from history,
   including their review audio, temporary files, outputs, and local feedback records
-- **Intelligent sermon boundary detection** using Claude API with word-level timestamp refinement
-  - Snaps end boundary to "Amen" before liturgical transitions ("let us stand," "stand and sing")
-  - Handles both with-prayer and without-prayer endpoints, picks whichever fits best
-  - Snaps start boundary by matching the first spoken sermon words
+- **Hymn-based sermon detection** using local audio classification
+  - Selects between the final two substantial sung hymns
+  - Ignores musical responses shorter than 90 seconds and instrumental-only music
+  - Joins brief gaps between hymn verses
+  - Ends after the closing prayer's “Amen” before the hymn announcement when detected;
+    otherwise ends just before the final hymn's music
+  - Keeps the suggested range independent of broadcast length until human review
 - **Duration fitting** to any target length:
   - Trims long pauses (configurable threshold)
   - Expands short pauses if sermon needs to be longer
@@ -42,7 +45,8 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
        │
        ├─ downloader.py        (YouTube via yt-dlp, or local file conversion)
        ├─ transcription.py     (OpenAI, local HTTP, or faster-whisper)
-       ├─ boundary_detector.py (Claude API + word-level refinement)
+       ├─ music_detector.py    (local YAMNet music/singing classification)
+       ├─ boundary_detector.py (final two hymns + closing Amen)
        ├─ audio_processor.py   (silence detection, trim/expand, tempo)
        ├─ teaser_selector.py   (Claude API + verbatim text matching)
        └─ assembler.py         (intro + sermon + outro concatenation)
@@ -50,7 +54,7 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
 
 ## Review Workflow
 
-1. **Analyze** — download/convert, transcribe, build the waveform, and generate optional AI suggestions
+1. **Analyze** — download/convert, transcribe, build the waveform, and locate hymns and suggest the sermon and teaser markers
 2. **Review** — confirm sermon start/end and teaser start/end in the browser
 3. **Preflight** — show the selected duration, available sermon time, warnings, and blockers
 4. **Render** — extract the confirmed sermon, fit it conservatively, mix the teaser, and assemble output(s)
@@ -100,6 +104,25 @@ cp .env.example .env
 
 When both bumper variants are requested, their intro-plus-outro durations must
 match so both finished files can satisfy the same broadcast target.
+
+### Hymn detector setup
+
+The detector runs locally on CPU using a pinned 16 MB YAMNet model. The first
+automatic analysis downloads it into `state/models/yamnet.onnx`. To download
+and verify it before starting the service:
+
+```bash
+python -m pipeline.music_detector
+```
+
+Set `HYMN_MODEL_PATH` to use a different storage location. The service account
+must be able to read it (and write its directory when downloading). If the model
+is unavailable or fewer than two qualifying hymns are found, the editor opens
+with the full recording and an explicit manual-selection warning. No older AI
+boundary logic is used. Automatic teaser suggestions are skipped in that case.
+
+See [hymn detection](docs/hymn-detection.md) for the exact rules, model provenance,
+and reference recording validation.
 
 ### Run locally
 
@@ -184,7 +207,7 @@ Files are written to `output/` using the timestamp-based job ID:
 ## Built With
 
 - [Flask](https://flask.palletsprojects.com/) — web framework
-- [Anthropic Claude API](https://docs.anthropic.com/) — sermon analysis & teaser selection
+- [Anthropic Claude API](https://docs.anthropic.com/) — teaser selection & feedback
 - [OpenAI Whisper API](https://platform.openai.com/docs/guides/speech-to-text) — transcription
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube extraction
 - [ffmpeg](https://ffmpeg.org/) — audio processing
