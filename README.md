@@ -18,6 +18,7 @@ Built for [Grace Free Lutheran Church](https://gracefree.com/) to streamline wee
   - Selects between the final two substantial sung hymns
   - Ignores musical responses shorter than 90 seconds and instrumental-only music
   - Joins brief gaps between hymn verses
+  - Starts just before nearby speech after the hymn, clearing the final chord
   - Ends after the closing prayer's “Amen” before the hymn announcement when detected;
     otherwise ends just before the final hymn's music
   - Keeps the suggested range independent of broadcast length until human review

@@ -74,7 +74,7 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str,
                     cuts: list = None) -> str:
     """Extract a time segment from the audio file.
     Uses soundfile for reliable sample-accurate extraction.
-    Adds a small pre-roll buffer and fade-in/fade-out for clean transitions.
+    Honors the selected range exactly, with fade-in/fade-out for clean transitions.
     """
     # Read the full audio to get sample rate
     info = sf.info(audio_path)
@@ -88,12 +88,9 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str,
     if end <= start:
         raise ValueError("The selected audio range is empty or outside the source audio")
 
-    # Pad start by 500ms to avoid clipping into the first word
-    pre_roll = 0.5
-    padded_start = max(0, start - pre_roll)
-
-    # Calculate sample positions
-    start_sample = int(padded_start * sr)
+    # Never prepend audio before a reviewed marker: doing so can reintroduce
+    # the hymn tail that the automatic suggestion or manual edit excluded.
+    start_sample = int(round(start * sr))
     end_sample = min(info.frames, int(round(end * sr)))
 
     # Read just the segment we need
@@ -111,8 +108,8 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str,
         cut_end = min(end, float(cut["end"]))
         if cut_end <= cut_start:
             continue
-        relative_start = int(round((cut_start - padded_start) * sr))
-        relative_end = int(round((cut_end - padded_start) * sr))
+        relative_start = int(round((cut_start - start) * sr))
+        relative_end = int(round((cut_end - start) * sr))
         data = _splice_out_samples(data, relative_start, relative_end, int(0.05 * sr))
         applied_cuts.append((cut_start, cut_end))
 
@@ -132,7 +129,7 @@ def extract_segment(audio_path: str, start: float, end: float, output_path: str,
     sf.write(output_path, data, sr, subtype='PCM_16')
 
     duration = len(data) / sr
-    logger.info(f"Extracted segment: {padded_start:.1f}s - {end:.1f}s ({duration:.1f}s) from {audio_path}")
+    logger.info(f"Extracted segment: {start:.1f}s - {end:.1f}s ({duration:.1f}s) from {audio_path}")
     if applied_cuts:
         logger.info("Applied %d manual cut(s) while extracting", len(applied_cuts))
     return output_path

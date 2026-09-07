@@ -38,6 +38,24 @@ def test_selects_last_two_hymns_ignoring_special_music_and_short_responses():
     assert "sermon_end_without_prayer" not in result
 
 
+@pytest.mark.parametrize(("speech_start", "expected"), [(1650, 1650), (1654, 1653.7)])
+def test_start_clears_hymn_tail_without_skipping_immediate_speech(speech_start, expected):
+    events = service_events()
+    preceding = [event for event in events if event["is_hymn"]][-2]
+    preceding["following_speech_start"] = speech_start
+    result = detector.select_sermon_range(events, {}, 4400)
+    assert result["sermon_start"] == pytest.approx(expected)
+    assert result["start_method"] == "first_speech_after_hymn"
+    assert result["sermon_end"] == 3400
+
+
+def test_missing_nearby_speech_retains_hymn_boundary_with_review_instruction():
+    result = detector.select_sermon_range(service_events(), {}, 4400)
+    assert result["sermon_start"] == 1650
+    assert result["start_method"] == "after_hymn"
+    assert "ringing final chord" in result["selection_reason"]
+
+
 def test_closing_prayer_is_kept_and_hymn_announcement_excluded():
     transcript = {"words": (
         words("Amen. Would you bow with me in prayer?", 3300)

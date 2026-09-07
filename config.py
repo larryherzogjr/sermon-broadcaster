@@ -105,6 +105,8 @@ REVIEW_DIR = os.path.join(STATE_DIR, "review_jobs")
 # Hymn-based sermon detection. Short sung responses never count as hymns.
 HYMN_MIN_DURATION_SECONDS = 90.0
 HYMN_MAX_GAP_SECONDS = 5.0  # Bridge short breaks between verses.
+HYMN_SPEECH_SEARCH_SECONDS = 15.0  # Clear the final chord before nearby speech.
+HYMN_SPEECH_LEAD_SECONDS = 0.3  # Keep a small lead-in before the first spoken word.
 HYMN_END_SEARCH_SECONDS = 120.0  # Look for the closing Amen near the final hymn.
 HYMN_MODEL_PATH = os.getenv(
     "HYMN_MODEL_PATH", os.path.join(STATE_DIR, "models", "yamnet.onnx")

@@ -13,15 +13,21 @@ combination selector. There is no AI boundary prompt or old-detector fallback.
    least 20% of its detected music. Instrumental introductions can belong to a
    hymn; purely instrumental special music, preludes, and communion music do
    not count as sung hymns.
-5. Start at the end of the second-to-last qualifying hymn. Include the spoken
-   material after it, including scripture and prayer.
+5. After the second-to-last qualifying hymn, locate the first speech within
+   15 seconds, stopping the search if another musical event begins. Start 0.3
+   seconds before that speech, never before the detected hymn end. This clears
+   a ringing final chord without imposing a fixed delay on a pastor who starts
+   immediately. If no nearby speech is detected, retain the hymn end and ask
+   the reviewer to check for a ringing chord. Include the spoken material,
+   including scripture and prayer.
 6. Search only the last 120 seconds before the final hymn for an Amen followed
    directly by a hymn announcement within 30 seconds. Also accept Amen as the
    final transcribed word within 30 seconds of the hymn. Keep up to 0.3 seconds
    after the word, without including the announcement. Otherwise, stop at the
    start of the final hymn's music. Without word timestamps, use that fallback.
 7. Pause for the existing human review before duration fitting. Broadcast target
-   length has no influence on automatic sermon boundaries.
+   length has no influence on automatic sermon boundaries. Extraction honors
+   the confirmed start exactly; it does not prepend unselected audio.
 
 The classifier operates on overlapping 0.975-second windows with a 0.48-second
 hop. Its event boundaries are suggestions at that resolution, not guaranteed
@@ -33,7 +39,8 @@ in the editor. The older direct `run_pipeline` entry point reports the failure
 instead of rendering a guessed full-service range.
 
 The fixed service parameters are in `config.py`: `HYMN_MIN_DURATION_SECONDS`,
-`HYMN_MAX_GAP_SECONDS`, and `HYMN_END_SEARCH_SECONDS`. Changing music classifier
+`HYMN_MAX_GAP_SECONDS`, `HYMN_SPEECH_SEARCH_SECONDS`, `HYMN_SPEECH_LEAD_SECONDS`,
+and `HYMN_END_SEARCH_SECONDS`. Changing music classifier
 thresholds should be validated against recordings, not used to fit a target
 broadcast length.
 
@@ -76,7 +83,7 @@ approximately 1 hour 20 minutes. The music pass over the full recording produced
 | Event | Suggested start | Suggested end | Treatment |
 |---|---|---|---|
 | First sung hymn | 7:46.56 | 10:15.84 | Qualifying hymn |
-| Second-to-last sung hymn | 30:48.96 | 32:48.96 | Sermon begins afterward |
+| Second-to-last sung hymn | 30:48.96 | 32:48.96 | Locate speech after the fading chord |
 | Final sung hymn | 1:01:09.12 | 1:04:04.80 | Outer limit for sermon end |
 | Closing musical response | 1:19:04.80 | About 1:20:22 | Below 90 seconds; ignored |
 
@@ -86,8 +93,12 @@ transcription of the opening and closing regions places the scripture
 introduction after the preceding hymn and the prayer's Amen at
 1:00:43.94–1:00:44.08, followed by the hymn announcement at 1:00:48.68.
 
-Result: **32:48.96–1:00:44.38**, a 27:55.42 selection. Without the word transcript,
-the expected fallback is **32:48.96–1:01:09.12**. This is one reference recording,
+The classifier stops calling the fading chord music at 32:48.96, before it is
+fully quiet. Nearby speech begins in the classifier at 32:53.76, with the first
+transcribed word at 32:54.06. The corrected start is 32:53.46.
+
+Result: **32:53.46–1:00:44.38**, a 27:50.92 selection. Without the word transcript,
+the expected fallback is **32:53.46–1:01:09.12**. This is one reference recording,
 not a reliability claim across all services. Different transcription backends
 may supply slightly different word times or require the before-music fallback.
 

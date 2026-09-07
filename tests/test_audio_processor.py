@@ -44,6 +44,26 @@ def test_extract_segment_clamps_end_to_decoded_audio_boundary(tmp_path):
     assert sf.info(output).frames == 48000
 
 
+def test_extract_segment_does_not_reintroduce_audio_before_reviewed_start(tmp_path):
+    source = tmp_path / "source.wav"
+    output = tmp_path / "selection.wav"
+    # Loud hymn before the marker, quieter spoken material after it.
+    sf.write(source, np.concatenate([np.full(48000, 0.8), np.full(48000, 0.2)]), 48000)
+    audio_processor.extract_segment(str(source), 1.0, 2.0, str(output))
+    data, _ = sf.read(output)
+    assert len(data) == 48000
+    assert np.max(data) < 0.21
+
+
+def test_internal_cut_stays_aligned_with_nonzero_selection_start(tmp_path):
+    source = tmp_path / "source.wav"
+    output = tmp_path / "selection.wav"
+    sf.write(source, np.full(144000, 0.25), 48000)
+    audio_processor.extract_segment(str(source), 1.0, 3.0, str(output),
+                                    cuts=[{"start": 1.5, "end": 2.0}])
+    assert sf.info(output).frames == 69600
+
+
 def test_extract_segment_removes_manual_cut(tmp_path):
     source = tmp_path / "source.wav"
     output = tmp_path / "selection.wav"

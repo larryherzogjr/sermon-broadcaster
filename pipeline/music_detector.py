@@ -135,6 +135,21 @@ def group_music_frames(frames: list) -> list:
         )
         for key in ("start", "end", "music_seconds", "singing_seconds"):
             event[key] = round(event[key], 3)
+    for index, event in enumerate(events):
+        if not event["is_hymn"]:
+            continue
+        # A ringing final chord can drop below the music threshold while it
+        # remains audible. Locate the first nearby speech instead of adding a
+        # fixed delay that could cut off a pastor who starts immediately.
+        search_end = event["end"] + config.HYMN_SPEECH_SEARCH_SECONDS
+        if index + 1 < len(events):
+            search_end = min(search_end, events[index + 1]["start"])
+        event["following_speech_start"] = next((
+            frame["start"] for frame in frames
+            if event["end"] <= frame["start"] < search_end
+            and frame["speech"] >= 0.5
+            and frame["speech"] > max(frame["music"], frame["singing"], frame["choir"])
+        ), None)
     return events
 
 

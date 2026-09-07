@@ -19,7 +19,8 @@ def test_september_six_reference_service():
         {"word": "hymn", "start": 3649.1, "end": 3649.42},
     ]}
     result = detect_boundaries(os.environ["HYMN_REFERENCE_AUDIO"], transcript)
-    assert result["sermon_start"] == pytest.approx(1968.96, abs=1.0)
+    assert result["sermon_start"] == pytest.approx(1973.46, abs=0.5)
+    assert result["start_method"] == "first_speech_after_hymn"
     assert result["sermon_end"] == pytest.approx(3644.38, abs=0.1)
     assert result["end_method"] == "closing_amen"
     hymns = [event for event in result["music_events"] if event["is_hymn"]]

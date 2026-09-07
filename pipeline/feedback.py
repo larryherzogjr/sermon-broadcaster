@@ -304,7 +304,7 @@ def _build_issue_body(job, messages, summary, severity):
     out.append("### Boundaries\n")
     out.append(f"- sermon_start: {boundaries.get('sermon_start')}\n")
     out.append(f"- sermon_end (selected): {boundaries.get('sermon_end')}\n")
-    for key in ("end_method", "selection_reason", "selection_warning",
+    for key in ("start_method", "end_method", "selection_reason", "selection_warning",
                 "preceding_hymn", "following_hymn",
                 "sermon_end_with_prayer", "sermon_end_without_prayer"):
         if key in boundaries:  # Retain diagnostics for older saved jobs, too.

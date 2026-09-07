@@ -92,12 +92,22 @@ def select_sermon_range(events: list, transcript_data: dict, audio_duration: flo
     start, music_start = float(preceding["end"]), float(following["start"])
     if not (0 <= start < music_start <= audio_duration):
         raise BoundaryDetectionError("The final two hymns do not bracket a usable sermon range.")
+    speech_start = preceding.get("following_speech_start")
+    if speech_start is not None and start <= speech_start < min(
+        music_start, start + config.HYMN_SPEECH_SEARCH_SECONDS
+    ):
+        start = max(start, speech_start - config.HYMN_SPEECH_LEAD_SECONDS)
+        start_method = "first_speech_after_hymn"
+        opening_reason = "Starts just before the first speech after the second-to-last hymn"
+    else:
+        start_method = "after_hymn"
+        opening_reason = "Starts at the detected hymn end; check for a ringing final chord"
     amen_end = closing_prayer_end(transcript_data, start, music_start)
     end = amen_end if amen_end is not None else music_start
     reason = (
-        "Starts after the second-to-last hymn; ends after the closing Amen."
+        f"{opening_reason}; ends after the closing Amen."
         if amen_end is not None else
-        "Starts after the second-to-last hymn; ends before the final hymn's music. "
+        f"{opening_reason}; ends before the final hymn's music. "
         "Check the ending for a hymn announcement."
     )
     return {
@@ -107,6 +117,7 @@ def select_sermon_range(events: list, transcript_data: dict, audio_duration: flo
         "sermon_title_guess": "Sermon",
         "selection_label": "between final two hymns",
         "selection_reason": reason,
+        "start_method": start_method,
         "end_method": "closing_amen" if amen_end is not None else "before_hymn",
         "music_events": events,
         "preceding_hymn": preceding,

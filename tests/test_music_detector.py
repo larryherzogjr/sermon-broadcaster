@@ -56,6 +56,37 @@ def test_speech_dominates_background_music():
     assert detector.group_music_frames(frames) == []
 
 
+def speech(start, end):
+    frames = music(start, end, singing=False)
+    for frame in frames:
+        frame["speech"], frame["music"] = 0.95, 0.0
+    return frames
+
+
+def test_hymn_retains_first_speech_after_fading_chord():
+    frames = music(0, 90)
+    tail = music(90, 94, singing=False)
+    for frame in tail:
+        frame["music"] = 0.3  # Still audible, but no longer confidently music.
+    # Do not skip a short initial word in favor of later sustained speech.
+    result = detector.group_music_frames(frames + tail + speech(95, 96) + speech(100, 110))
+    assert result[0]["end"] == 90
+    assert result[0]["following_speech_start"] == 95
+
+
+@pytest.mark.parametrize("speech_start", [90, 94, 104])
+def test_speech_search_follows_actual_onset_not_fixed_delay(speech_start):
+    result = detector.group_music_frames(music(0, 90) + speech(speech_start, speech_start + 2))
+    assert result[0]["following_speech_start"] == speech_start
+
+
+def test_speech_search_does_not_jump_to_distant_speech_or_across_more_music():
+    result = detector.group_music_frames(music(0, 90) + speech(110, 115))
+    assert result[0]["following_speech_start"] is None
+    result = detector.group_music_frames(music(0, 90) + music(96, 98) + speech(100, 110))
+    assert result[0]["following_speech_start"] is None
+
+
 @pytest.mark.parametrize("seconds", [0.1, 0.48, 1.0, 30.72, 31.0, 61.8])
 def test_chunk_scoring_covers_tail_once_without_padding_the_recording(tmp_path, seconds):
     path = tmp_path / "audio.wav"
