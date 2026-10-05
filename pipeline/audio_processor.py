@@ -395,7 +395,9 @@ def expand_silences(audio_path: str, pauses: list, time_to_add: float,
                     output_path: str) -> tuple:
     """
     Expand existing pauses to add time to the audio.
-    Distributes added silence proportionally across existing pauses.
+    Distributes added silence evenly, respecting insertion and final pause caps.
+    Reserves room for the maximum permitted slowdown. Existing long pauses
+    are left unchanged.
 
     Returns: (output_path, time_added_seconds)
     """
@@ -403,7 +405,9 @@ def expand_silences(audio_path: str, pauses: list, time_to_add: float,
     max_insert_s = config.MAX_PAUSE_INSERT_MS / 1000.0
 
     # Find eligible pauses
-    eligible = [p for p in pauses if p["duration"] >= min_pause_s]
+    final_cap_s = config.MAX_EXPANDED_PAUSE_MS / 1000.0
+    eligible = [p for p in pauses if min_pause_s <= p["duration"]
+                < final_cap_s * config.MAX_SLOWDOWN]
     if not eligible:
         logger.warning("No eligible pauses found for expansion")
         return audio_path, 0.0
@@ -423,7 +427,8 @@ def expand_silences(audio_path: str, pauses: list, time_to_add: float,
         if time_added >= time_to_add:
             break
 
-        add_here = min(per_pause, time_to_add - time_added)
+        capacity = max(0.0, final_cap_s * config.MAX_SLOWDOWN - pause["duration"])
+        add_here = min(per_pause, capacity, time_to_add - time_added)
         insert_samples = int(add_here * sr)
 
         # Insert silence at the midpoint of the pause
@@ -503,7 +508,7 @@ def fit_to_duration(sermon_audio_path: str, target_duration_str: str,
     Strategy:
     1. Detect pauses in the sermon audio
     2. If too long: trim silences first, then speed up if needed
-    3. If too short: expand silences first, then slow down if needed
+    3. If too short: reserve modest slowdown, add capped silence, then adjust tempo
     4. Encode to broadcast MP3
 
     Returns dict with processing details.
@@ -553,8 +558,14 @@ def fit_to_duration(sermon_audio_path: str, target_duration_str: str,
         processing_log["silence_adjustment"] = -time_saved
         _diag_check(working_path, "after_trim", status_callback)
     else:
-        # Too short — expand silences first
-        time_needed = abs(delta)
+        # Reserve half the shortfall for slowdown, up to the preferred 4%.
+        # If pause capacity is insufficient, the final tempo step can use
+        # the existing hard slowdown limit.
+        preferred_factor = max(
+            config.PREFERRED_SLOWDOWN,
+            current_duration / (current_duration + abs(delta) / 2.0),
+        )
+        time_needed = max(0.0, target_seconds * preferred_factor - current_duration)
         expanded_path = sermon_audio_path.replace(".wav", "_expanded.wav")
         working_path, time_added = expand_silences(
             working_path, pauses, time_needed, expanded_path

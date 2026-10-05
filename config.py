@@ -85,7 +85,9 @@ TEASER_WINDOW_END = 35.0
 MAX_PAUSE_DURATION_MS = 1500      # Trim pauses longer than this (ms)
 TARGET_PAUSE_DURATION_MS = 800    # Trim them down to this (ms)
 MIN_PAUSE_FOR_INSERT_MS = 300     # Minimum existing pause to expand when adding time
-MAX_PAUSE_INSERT_MS = 2000        # Don't expand any single pause beyond this
+MAX_PAUSE_INSERT_MS = 500         # Maximum added silence per existing pause
+MAX_EXPANDED_PAUSE_MS = 1500      # Maximum resulting expanded pause, after slowdown
+PREFERRED_SLOWDOWN = 0.96         # Aim for at most 4% slowdown before adding pauses
 
 # Tempo adjustment limits
 MAX_SPEEDUP = 1.08   # Don't speed up more than 8%
@@ -112,9 +114,9 @@ HYMN_MODEL_PATH = os.getenv(
     "HYMN_MODEL_PATH", os.path.join(STATE_DIR, "models", "yamnet.onnx")
 )
 
-# Human-review guardrails. Allow shortfall experiments up to 3:05; rendering
+# Human-review guardrails. Allow shortfall experiments up to 5:00; rendering
 # still enforces the pause, tempo, and final-duration limits.
-MAX_AUTOMATIC_SHORTFALL_SECONDS = 185
+MAX_AUTOMATIC_SHORTFALL_SECONDS = 300
 FINAL_DURATION_TOLERANCE_SECONDS = 2.0
 
 # Feedback / GitHub issue submission

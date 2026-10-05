@@ -133,7 +133,7 @@ def test_preflight_accepts_exact_target():
     assert result["difference_seconds"] == 0.0
 
 
-@pytest.mark.parametrize(("shortfall", "ready"), [(184, True), (185, True), (186, False)])
+@pytest.mark.parametrize(("shortfall", "ready"), [(184, True), (300, True), (301, False)])
 def test_preflight_shortfall_limit(shortfall, ready):
     review = {
         "audio_duration": 2000.0,

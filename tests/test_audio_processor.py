@@ -75,3 +75,49 @@ def test_extract_segment_removes_manual_cut(tmp_path):
 
     # The 50 ms crossfade overlaps the retained sides in addition to the cut.
     assert sf.info(output).frames == 69600
+
+
+def test_expansion_caps_insertions_and_resulting_pauses(tmp_path):
+    source = tmp_path / "source.wav"
+    output = tmp_path / "expanded.wav"
+    sf.write(source, np.zeros(5000), 1000)
+    pauses = [
+        {"start": 0.0, "end": 0.3, "duration": 0.3},
+        {"start": 1.0, "end": 2.3, "duration": 1.3},
+        {"start": 3.0, "end": 4.6, "duration": 1.6},
+    ]
+    _, added = audio_processor.expand_silences(str(source), pauses, 10, str(output))
+    # Short pause receives 0.5s; 1.3s pause gets only the room left below
+    # the 1.5s cap after maximum slowdown. Already-long pause is untouched.
+    expected = 0.5 + (1.5 * audio_processor.config.MAX_SLOWDOWN - 1.3)
+    assert abs(added - expected) < 1e-9
+    assert abs(sf.info(output).duration - (5 + expected)) < 0.002
+
+
+def test_short_sermon_balances_pauses_and_slowdown(monkeypatch, tmp_path):
+    source = str(tmp_path / "sermon.wav")
+    durations = {source: 1455.0}
+    requested_pause_time = []
+    monkeypatch.setattr(audio_processor, "get_audio_duration", lambda path: durations[path])
+    monkeypatch.setattr(audio_processor, "detect_pauses", lambda path: [])
+    monkeypatch.setattr(audio_processor, "_diag_check", lambda *args: None)
+
+    def expand(path, pauses, amount, output):
+        requested_pause_time.append(amount)
+        durations[output] = durations[path] + amount
+        return output, amount
+
+    def tempo(path, factor, output):
+        durations[output] = durations[path] / factor
+        return output
+
+    def encode(path, output):
+        durations[output] = durations[path]
+
+    monkeypatch.setattr(audio_processor, "expand_silences", expand)
+    monkeypatch.setattr(audio_processor, "adjust_tempo", tempo)
+    monkeypatch.setattr(audio_processor, "encode_final", encode)
+    result = audio_processor.fit_to_duration(source, "27:20", str(tmp_path / "out.mp3"))
+    assert abs(result["tempo_factor"] - 0.96) < 1e-9
+    assert abs(requested_pause_time[0] - 119.4) < 1e-9
+    assert abs(result["final_duration"] - 1640) < 1e-9
