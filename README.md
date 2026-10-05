@@ -191,6 +191,7 @@ All tunable parameters live in `config.py`:
 | `TEASER_WINDOW_END` | `35.0` | End of teaser window |
 | `MAX_SPEEDUP` | `1.08` | Maximum tempo speedup (8%) |
 | `MAX_SLOWDOWN` | `0.93` | Maximum tempo slowdown (7%) |
+| `MAX_AUTOMATIC_SHORTFALL_SECONDS` | `185` | Allow selections up to 3:05 short; pause and tempo limits still apply |
 | `MAX_PAUSE_DURATION_MS` | `1500` | Trim pauses longer than this |
 | `OUTPUT_BITRATE` | `128k` | Final MP3 bitrate |
 | `MAX_UPLOAD_GB` | `5` | Maximum request/upload size |

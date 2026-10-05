@@ -133,6 +133,20 @@ def test_preflight_accepts_exact_target():
     assert result["difference_seconds"] == 0.0
 
 
+@pytest.mark.parametrize(("shortfall", "ready"), [(184, True), (185, True), (186, False)])
+def test_preflight_shortfall_limit(shortfall, ready):
+    review = {
+        "audio_duration": 2000.0,
+        "sermon_target_seconds": 1638.0,
+        "include_dynamic": False,
+    }
+    result = review_workflow.build_preflight(
+        review, {"sermon_start": 0.0, "sermon_end": 1638.0 - shortfall}
+    )
+    assert result["ready"] is ready
+    assert bool(result["blockers"]) is not ready
+
+
 def test_manual_full_source_uses_decoded_audio_duration():
     boundaries = review_workflow._initial_boundaries(
         {"duration": 1800.8}, True, 1800.0

@@ -112,9 +112,9 @@ HYMN_MODEL_PATH = os.getenv(
     "HYMN_MODEL_PATH", os.path.join(STATE_DIR, "models", "yamnet.onnx")
 )
 
-# Human-review guardrails. Small timing corrections are safe to automate; a
-# large shortfall usually means the selected sermon boundaries are wrong.
-MAX_AUTOMATIC_SHORTFALL_SECONDS = 45
+# Human-review guardrails. Allow shortfall experiments up to 3:05; rendering
+# still enforces the pause, tempo, and final-duration limits.
+MAX_AUTOMATIC_SHORTFALL_SECONDS = 185
 FINAL_DURATION_TOLERANCE_SECONDS = 2.0
 
 # Feedback / GitHub issue submission
